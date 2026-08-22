@@ -1,0 +1,190 @@
+# PulseGate: Runbook
+
+Almost all work in this project is Terraform code or Kubernetes manifests. Some operations are neither, because Azure gives no API, no Terraform resource, or because the operation is the one that bootstraps the tool that would otherwise perform it.
+
+An operation in this file has three parts: the reason for it, the correct time to do it, and the steps. Each operation also has a check, because a manual operation has no plan output to read.
+
+## Status
+
+| Operation | Milestone | Blocking? | Status |
+| --- | --- | --- | --- |
+| 1. Register the resource providers | `v0-bootstrap` | **Yes** | Not done |
+| 2. Confirm the directory and subscription permissions | `v0-bootstrap` | **Yes** | Confirmed |
+| 3. Configure the GitHub repository variables | `v0-bootstrap` | Yes, for step 7 | Not done |
+| 4. Install Argo CD, once, by hand | `v3-gitops` | Yes | Not done |
+| 5. Retire the Argo CD initial admin password | `v3-gitops` | No | Not done |
+| 6. Register a domain and delegate the zone | `v9-edge` | Yes | Not done |
+
+Operations 1 and 2 come before the first `terraform apply`, not after it. This is the opposite of LinkForge, whose manual operations were all follow-ups that ran late. Read both before you write any HCL.
+
+## The Azure difference
+
+LinkForge's runbook opened with a three-day waiting sequence: enable Cost Explorer, wait, apply, wait, activate the tags, wait. Azure has no equivalent. Cost Analysis groups by tag with no activation step, so that sequence does not exist here and nothing in this project is blocked on a billing delay.
+
+Azure moves the friction to the front instead. A subscription will not create a resource type whose provider is not registered, and a fresh subscription has almost nothing registered. The failure arrives as a `MissingSubscriptionRegistration` error in the middle of an apply, halfway through a dependency graph, which is a worse place to discover it than a runbook.
+
+## Operation 1: Register the resource providers
+
+**Reason.** Azure gates each resource type behind a subscription-level provider registration. Terraform's `azurerm` provider registers a core set automatically, and the set it registers does not include most of what this project needs. An unregistered provider fails the apply, not the plan, so `terraform plan` in CI will pass and the apply will not.
+
+**When.** Before step 2 of `v0-bootstrap`. Registration is asynchronous and takes a few minutes for each namespace, so start it and do something else.
+
+**Verified state.** On subscription `<subscription-id>`, checked at the time this file was written, every namespace this project needs is `NotRegistered`. This is normal for a new subscription and it is not an error.
+
+**Steps.**
+
+Register the namespaces the roadmap reaches. Registering one this project never uses costs nothing, so register the full set now rather than returning here at each milestone.
+
+```bash
+for ns in \
+  Microsoft.ContainerService Microsoft.ContainerRegistry \
+  Microsoft.Network Microsoft.Compute Microsoft.Storage \
+  Microsoft.KeyVault Microsoft.ServiceBus Microsoft.DBforPostgreSQL \
+  Microsoft.OperationalInsights Microsoft.Insights Microsoft.Monitor \
+  Microsoft.AlertsManagement Microsoft.Dashboard \
+  Microsoft.Cdn Microsoft.Consumption Microsoft.CostManagement \
+  Microsoft.PolicyInsights Microsoft.Authorization \
+  Microsoft.KubernetesConfiguration Microsoft.DataProtection \
+  Microsoft.Security Microsoft.ManagedIdentity
+do
+  az provider register --namespace "$ns"
+done
+```
+
+**Check.** Registration is not instant. Poll until nothing is pending:
+
+```bash
+az provider list \
+  --query "[?registrationState!='Registered' && registrationState!='NotRegistered'].{n:namespace,s:registrationState}" \
+  -o table
+```
+
+An empty result means nothing is mid-registration. Then confirm the ones that matter are actually `Registered`:
+
+```bash
+az provider list \
+  --query "[?namespace=='Microsoft.ContainerService'||namespace=='Microsoft.ContainerRegistry'||namespace=='Microsoft.KeyVault'||namespace=='Microsoft.ServiceBus'||namespace=='Microsoft.DBforPostgreSQL'||namespace=='Microsoft.OperationalInsights'].{n:namespace,s:registrationState}" \
+  -o table
+```
+
+**Note.** A later milestone that uses a preview feature needs `az feature register` as well, which is a different command with a different wait. Add an operation to this file when that happens; do not guess the feature names now.
+
+## Operation 2: Confirm the directory and subscription permissions
+
+**Reason.** Step 4 of `v0-bootstrap` creates an Entra application, a service principal, federated credentials, and role assignments. Three of those four are not subscription resources. They live in the Entra directory and are created through Microsoft Graph, which means subscription `Owner` is not sufficient on its own. Discovering this halfway through the OIDC work costs an afternoon.
+
+**When.** Before you write the `azuread` provider block.
+
+**What is needed.**
+
+| To create | Where it lives | Permission required |
+| --- | --- | --- |
+| Application registration, service principal | Entra directory | `Application Administrator`, or `Global Administrator` |
+| Federated identity credential | Entra directory | The same |
+| Role assignment on the subscription | The subscription | `Owner`, or `User Access Administrator` |
+| Storage account, everything else | The subscription | `Contributor` is enough |
+
+**Verified state.**
+
+| Check | Result |
+| --- | --- |
+| Signed-in user | `<admin-upn>` |
+| Directory role | `Global Administrator` |
+| Subscription role | `Owner` on `/subscriptions/<subscription-id>` |
+| Tenant | `<tenant-id>` |
+
+Both conditions are met. No action is required, and this operation is recorded as confirmed rather than done.
+
+**Check.** If the account ever changes, these two commands answer both questions:
+
+```bash
+az rest --method get --url "https://graph.microsoft.com/v1.0/me/memberOf?\$select=displayName" \
+  --query "value[].displayName" -o tsv
+az role assignment list --assignee "$(az ad signed-in-user show --query userPrincipalName -o tsv)" \
+  --include-inherited --query "[].{role:roleDefinitionName,scope:scope}" -o table
+```
+
+**Note.** Being Global Administrator makes the bootstrap easy and is not a state to stay in. The whole purpose of step 4 is that CI never uses this identity. After `v0-bootstrap` is complete, this account is break-glass only, and the pipeline runs as a federated credential with role assignments that grow one milestone at a time.
+
+## Operation 3: Configure the GitHub repository variables
+
+**Reason.** The `azure/login` action needs three identifiers to request a token: the client ID of the application, the tenant ID, and the subscription ID. None of them is a secret — they are identifiers, and the actual authentication is the federated OIDC token that GitHub mints for the job. Storing them as repository *variables* rather than *secrets* is deliberate and is the point of the exercise: after this milestone there is nothing secret in the repository's settings at all.
+
+**When.** After step 4 of `v0-bootstrap` creates the application, and before step 7 runs the first workflow.
+
+**Steps.** In the repository, under Settings, Secrets and variables, Actions, on the Variables tab, add:
+
+| Name | Value |
+| --- | --- |
+| `AZURE_CLIENT_ID` | The client ID of the plan application, from the Terraform output |
+| `AZURE_TENANT_ID` | `<tenant-id>` |
+| `AZURE_SUBSCRIPTION_ID` | `<subscription-id>` |
+
+The apply identity has a second client ID. Whether it lives in a repository variable or a GitHub environment depends on how step 7 gates the apply, and that decision belongs to the milestone.
+
+**Check.** Open a pull request that changes a Terraform file. The workflow must reach `terraform plan` and read state from the storage account. If it fails at the login step, the federated credential's subject does not match the workflow's claim — this is almost always the `pull_request` versus `ref` subject distinction, and it is a Terraform-side fix, not a GitHub-side one.
+
+**Note.** The federated credential's subject string is exact. A credential written for `repo:OWNER/pulsegate:ref:refs/heads/main` does not authorize a pull request job, which presents `repo:OWNER/pulsegate:pull_request`. Step 4 creates both, because step 7 needs the second and every later apply needs the first.
+
+## Operation 4: Install Argo CD, once, by hand
+
+**Reason.** Argo CD cannot install itself, and this project has declared that Terraform stops at the cluster boundary. The bootstrap has to break one of those two rules exactly once. Breaking it by hand, in the runbook, with a check, is better than breaking it in Terraform, where the exception becomes permanent and the cluster becomes a dependency of the state file.
+
+**When.** At the start of `v3-gitops`, against the cluster that `v2-cluster` built.
+
+**Steps.** The mechanics belong to the milestone and are not written out here in advance, because the chart version and the values file do not exist yet. The shape is fixed, and it is the part worth committing to now:
+
+1. Install Argo CD into the cluster once, from the chart, with a values file that is committed to this repository.
+2. Commit an Argo CD `Application` that points at Argo CD's own manifests in this repository.
+3. Let Argo CD sync that Application. From that reconcile onward, Argo CD manages its own upgrades and the hand-install is never repeated.
+
+**Check.** Delete the Argo CD Deployment and confirm that Argo CD restores it. If it does not, step 2 did not take, and Argo CD is a hand-installed component pretending to be a managed one — which is the exact failure this operation exists to avoid.
+
+**Note.** After this operation, `kubectl apply` against this cluster is a diagnostic tool, not a deployment method. Anything applied by hand from here on is drift, and `v3-gitops` configures Argo CD to remove it.
+
+## Operation 5: Retire the Argo CD initial admin password
+
+**Reason.** Argo CD generates an initial admin password and stores it in a Kubernetes Secret named `argocd-initial-admin-secret`. It is a bootstrap credential. It is not rotated, it is shared, and it grants full access to the thing that has full access to the cluster.
+
+**When.** In `v3-gitops`, in the same session as operation 4. Not later.
+
+**Steps.**
+
+1. Read the initial password from the secret and use it to log in once.
+2. Configure Entra ID as an OIDC provider for Argo CD, with RBAC mapping a directory group to the `admin` role.
+3. Disable the local admin account in the Argo CD configuration.
+4. Delete `argocd-initial-admin-secret`.
+
+**Check.** Log out and log in through Entra. Then confirm the local account is refused, and that the secret no longer exists in the namespace.
+
+**Note.** Step 2 needs another Entra application registration, which is why operation 2 matters beyond `v0-bootstrap`.
+
+## Operation 6: Register a domain and delegate the zone
+
+**Reason.** Terraform creates the Azure DNS zone. It cannot register a domain name at a registrar, and it cannot set the nameserver records at that registrar. That delegation is manual for any domain not bought through Azure.
+
+**When.** Early in `v9-edge`, and earlier than feels necessary. Nameserver delegation propagates on the registrar's schedule, and the ACME HTTP-01 challenge that issues the certificate cannot succeed until it has.
+
+**Steps.**
+
+1. Register a domain, at any registrar.
+2. Apply the Terraform that creates the Azure DNS zone.
+3. Read the four nameservers from the zone's output.
+4. Set those four as the domain's nameservers at the registrar.
+5. Wait for propagation.
+
+**Check.**
+
+```bash
+dig NS <your-domain> +short
+```
+
+The four Azure nameservers must be returned. Until they are, do not attempt certificate issuance — a failed ACME challenge counts against Let's Encrypt's rate limit, and the limit is low enough to lose an afternoon to.
+
+**Note.** The domain registration is an annual cost that no destroy operation removes, and it is the only cost in this project that Azure does not bill. Record it in [COST.md](COST.md) when it is incurred.
+
+## A note on operations this file does not have
+
+LinkForge's runbook carried a warning that joining an AWS Organization deactivates cost allocation tags, forcing a repeat of an earlier operation. Azure has no equivalent: tags need no activation, and moving a subscription between management groups does not disturb them.
+
+Azure's version of that trap is the one described in [COST.md](COST.md) — tags do not inherit downward, and most of an AKS bill is generated by resources AKS created rather than resources Terraform created. That is handled by an Azure Policy assignment in `v0-bootstrap`, which is code, so it does not belong in this file. It is mentioned here only so that its absence is not mistaken for an oversight.

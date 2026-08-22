@@ -1,0 +1,52 @@
+# Terraform state — never commit. Contains resource IDs and often secrets in plaintext.
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Plan files — binary, derived, and contain full state values in plaintext.
+*.tfplan
+tfplan
+
+# Provider binaries and module cache — downloaded, not source.
+.terraform/
+.terragrunt-cache/
+
+# Real variable values. The example file is committed as a template.
+*.tfvars
+*.tfvars.json
+!example.tfvars
+
+# Crash dumps
+crash.log
+crash.*.log
+
+# Kubeconfig — cluster credentials. `az aks get-credentials` writes here by default,
+# but a repo-local one is a common convenience and a common leak.
+kubeconfig
+kubeconfig-*
+*.kubeconfig
+
+# Helm chart dependencies — resolved from Chart.lock, not source.
+charts/**/charts/
+charts/**/*.tgz
+
+# Rendered manifests. Argo CD renders from source; a committed render is drift waiting to happen.
+manifests-rendered/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Environment files — connection strings live in Key Vault, not on disk.
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
+
+# Local working notes — personal scratch, not part of the deliverable.
+*.local.md
