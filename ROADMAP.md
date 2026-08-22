@@ -1,45 +1,37 @@
 # PulseGate — Milestone Roadmap
 
-PulseGate is one application. It is not a group of separate projects.
+PulseGate begins as one container on a cluster and ends as a governed platform: GitOps reconciliation, progressive delivery, policy enforcement, a second region, and finally a landing zone built around the workload rather than under it. Thirteen milestones separate those two states, and each one adds only the infrastructure the application needs by then.
 
-At the start, PulseGate is one container on a cluster. Each milestone adds more infrastructure to the same application. At the end, PulseGate is a platform with GitOps reconciliation, progressive delivery, policy enforcement, and a second region.
+## One application, thirteen milestones
 
-Each milestone adds only the infrastructure that the application needs at that time.
+Any platform on Azure needs the same foundations before it does anything useful: a resource group layout, a state backend, the identities, a network, a build step, a deploy path. Thirteen unrelated exercises would mean building those six things thirteen times over, and most of the effort would go into scaffolding rather than into anything new.
 
-## Why this project uses one application
+Here they are paid for once, in `v0-bootstrap`. Every milestone after it adds only what is genuinely new, which is what makes it possible to cover this much of Azure and Kubernetes without spending the whole time on setup.
 
-Each separate Azure project needs the same basic parts. These parts are a resource group layout, a state backend, the identities, a network, a build step, and a deploy path. You must build these parts before the project does useful work.
+The corollary is that the milestones are cumulative, not interchangeable. `v8-progressive` assumes the metrics that `v7-observable` built; `v6-scale` assumes the queue from `v5-state`. The order is the design.
 
-This project builds these parts one time, in milestone `v0-bootstrap`. Each milestone after `v0-bootstrap` adds only the new parts.
+## What this document is
 
-The result is that this project covers many Azure and Kubernetes services in a short time. Separate projects use most of that time on the same basic parts.
+A design in words. It names the resources for each milestone, says how they connect, and calls out the arguments that matter and why — but it does not contain the HCL or the YAML. The goal is to be able to draw the resource graph from memory, not to accumulate configuration.
 
-## About the infrastructure code
+The application inside the container is simple and is not the subject. It is Python; the rest of its constraints are in [README.md](README.md).
 
-This document gives the design in words. It does not give the HCL or the YAML.
+## The boundary: Terraform outside, Argo CD inside
 
-For each milestone, the text tells you which resources to use. The text also tells you how the resources connect, and which arguments are important. The purpose is to learn the resource graph.
-
-The application code in the container is simple. It is not the subject of this project. The language is Python.
-
-## Two sides of one system
-
-This project has a boundary that LinkForge did not have. Terraform builds the Azure resources. Argo CD builds the Kubernetes objects. The boundary between them is the cluster.
+Two tools build this platform, and the cluster wall separates them.
 
 | Side | Tool | What it owns |
 | --- | --- | --- |
 | Outside the cluster | Terraform | Resource groups, network, AKS, registry, database, queue, vault, DNS, identities |
 | Inside the cluster | Argo CD | Deployments, Services, CronJobs, Ingress, HPAs, ScaledObjects, Rollouts |
 
-Do not cross this boundary. Terraform has a Kubernetes provider and a Helm provider, and both work. They also make the cluster a dependency of the Terraform state, and then a broken cluster becomes a broken plan. Milestone `v3-gitops` defines this boundary and explains the one exception, which is Argo CD itself.
+That boundary is not crossed. Terraform's Kubernetes and Helm providers both work, and both make the cluster a dependency of the Terraform state — after which a broken cluster is also a broken plan. `v3-gitops` establishes the boundary and handles the single unavoidable exception, which is Argo CD itself.
 
-## When the application is written
+## When the application arrives
 
-The application appears in milestone `v2-cluster`. This is the first milestone with a registry and a cluster. The registry has no image to store, and the cluster has no pod to run, until the application exists.
+`v2-cluster` is the first milestone with a registry and a cluster, so it is the first milestone where an application is worth writing. `v1-network` needs none: the host there answers `/healthz` and exists only to prove the private subnets and the private access path work.
 
-Milestone `v1-network` needs no application. The host in that milestone answers on `/healthz` only. Its purpose is to prove that the private subnets and the private access method work.
-
-The application then grows with the infrastructure that supports it.
+After that the application grows alongside the infrastructure that carries it.
 
 | Milestone | What the application does | Who builds the image | Who deploys it |
 | --- | --- | --- | --- |
@@ -51,23 +43,15 @@ The application then grows with the infrastructure that supports it.
 | `v6-scale` | No change in behavior. The checker becomes elastic | GitHub Actions | Argo CD |
 | `v8-progressive` | A `/metrics` route for the canary analysis | GitHub Actions | Argo Rollouts |
 
-The application stays a stub until `v5-state`. Before that milestone there is no database, thus `POST /monitors` cannot keep a monitor. There is also no queue, thus the scheduler and the checker have no way to communicate.
+It stays a stub until `v5-state` because there is nothing for it to be otherwise: no database, so `POST /monitors` cannot persist a monitor; no queue, so the scheduler and the checker have no way to reach each other.
 
-The change in `v5-state` is the one with an important design point. Before it, PulseGate is one process. After it, PulseGate is three: an API that only reads, a CronJob that only enqueues, and a checker that only probes. The probe work leaves the request path. This split is the reason the checker can scale on its own in `v6-scale`.
+`v5-state` is the split that matters. One process becomes three — an API that only reads, a CronJob that only enqueues, a checker that only probes — and the probe work leaves the request path for good. That is what allows the checker to scale on its own in `v6-scale`.
 
-The application is a URL uptime monitor in Python. Select the framework in milestone `v2-cluster`. The infrastructure has these conditions:
+Everything downstream of the registry deals with an image and nothing else — no resource past that point knows or cares what the image contains, which is what would keep a later change of language cheap.
 
-- The application must answer on `/healthz` and on `/readyz`, and these must be two different routes. The liveness probe uses `/healthz`. The readiness probe uses `/readyz`. The liveness route must not read the database. If it does, one slow query restarts every pod at the same time.
-- The application must listen on the port that the container spec gives.
-- Use an asynchronous framework. The checker waits on remote HTTP for its whole life. A synchronous worker stops on each probe.
-- Run one process in each container. Two scale controls together make the CPU metric incorrect.
-- The application must handle `SIGTERM`. It must stop taking new work, finish the current probe, and exit. Milestone `v6-scale` puts the checker on Spot nodes, and a Spot eviction gives 30 seconds of notice.
+## Three scale controls
 
-The container image is the interface between the application and the infrastructure. No resource after the registry knows the contents of the image. Thus a change of language later is a small change.
-
-## How this project scales the service
-
-This project uses Kubernetes, thus it has three scale controls, and they are not the same control.
+Kubernetes gives three ways to add capacity, and they answer to different signals. All three arrive in `v6-scale`.
 
 | Control | Object | Scales | Signal |
 | --- | --- | --- | --- |
@@ -75,11 +59,11 @@ This project uses Kubernetes, thus it has three scale controls, and they are not
 | Pod scale, events | KEDA `ScaledObject` | The `checker` pods | Queue depth in Service Bus |
 | Node scale | Cluster autoscaler | The nodes under both | Pods that cannot be placed |
 
-The `api` scales on CPU because its load is request-driven and roughly continuous. The `checker` does not, and this is the important point. A checker spends its time waiting on a remote server, so its CPU is near zero even when it is completely saturated. CPU is the wrong signal for it. Queue depth is the right one, and reading queue depth is what KEDA exists to do.
+The `api` scales on CPU because its load is request-driven and roughly continuous. The `checker` cannot, and this is the point worth keeping: a checker spends its life waiting on a remote server, so its CPU sits near zero even when it is completely saturated. Queue depth is the signal that describes its real backlog, and reading queue depth is what KEDA exists to do.
 
-The cluster autoscaler sits under both and adds nodes when pods will not fit. It is not a replacement for either pod-level control. All three arrive in `v6-scale`.
+The cluster autoscaler sits beneath both and adds nodes when pods will not fit. It replaces neither pod-level control.
 
-The application does not change for scale. It must only be stateless. Milestone `v2-cluster` keeps the monitors in memory, thus the pods are not equal at that time. Milestone `v5-state` moves the monitors to PostgreSQL and removes this problem.
+The application does not change for any of this. It only has to be stateless — which it is not in `v2-cluster`, where monitors live in memory and the pods are therefore not interchangeable. `v5-state` moves them to PostgreSQL and the problem goes away.
 
 ## Milestones
 
@@ -97,6 +81,7 @@ The application does not change for scale. It must only be stateless. Milestone 
 | `v9-edge` | Public access at the edge | Front Door, WAF, Azure DNS, cert-manager, private origin |
 | `v10-harden` | Policy and least privilege | NetworkPolicy, Pod Security Admission, Azure Policy for AKS, Defender, private cluster, image signing |
 | `v11-resilient` | Disaster recovery and review | Availability zones, Azure Backup for AKS, a second region, Well-Architected review |
+| `v12-govern` | The landing zone around the workload | Management group hierarchy, ALZ policy initiatives at MG scope, hub VNet, Azure Firewall egress |
 
 ## What each milestone builds
 
@@ -192,6 +177,25 @@ Availability zones across the node pools and zone-redundant PostgreSQL. Azure Ba
 
 Then a deliberate failure exercise: delete a node pool, restore from backup, and record how long it took. A Well-Architected review of the whole platform against the five pillars, with the findings written down even where they will not be fixed.
 
+### `v12-govern` — the landing zone around it
+
+Everything up to here builds a workload. This milestone builds the platform that a workload is supposed to sit inside, and then moves PulseGate into it. The reference design is the Cloud Adoption Framework's enterprise-scale architecture — Azure Landing Zones — and the useful discovery is that it splits cleanly along the cost line this project already draws.
+
+**The governance half, which is free and permanent.** A management group hierarchy under the tenant root: Platform, Landing Zones, Sandbox, Decommissioned. The PulseGate subscription moves under Landing Zones. Management groups cost nothing, there are ten thousand of them available, and they are not the expensive part of a landing zone — the connectivity subscription is.
+
+Policy assignments then move to management group scope, which is where the tag-inheritance assignment from `v0-bootstrap` would have lived if there had been a hierarchy to hang it on. The ALZ policy initiatives are assigned with `enforcementMode` set to `DoNotEnforce` on the first pass, so that the compliance dashboard reports what *would* happen before anything is denied or created. Moving individual policies to enforced is then a deliberate act, one at a time, with the compliance report as evidence.
+
+That ordering is not caution for its own sake. A large share of the ALZ initiative is `deployIfNotExists` and `modify` policies, and a remediation task run against the shipped defaults will enable paid Defender for Cloud plans across the subscription, deploy a Log Analytics workspace, and wire diagnostic settings from every resource into it. Every one of those is a remaining cost in the sense of [COST.md](COST.md): it starts quietly and no destroy removes it. The parameters that control them are set before the first assignment, not discovered on the next invoice.
+
+**The connectivity half, which is hourly and disposable.** A hub virtual network peered to the PulseGate spoke, a route table on the checker subnet forcing `0.0.0.0/0` to the hub, and Azure Firewall as the single egress point. Application rules allow outbound HTTP and HTTPS to the public internet; network rules deny every RFC 1918 range and the link-local address.
+
+That is the same policy `v10-harden` already wrote as a Kubernetes NetworkPolicy, enforced a second time somewhere the cluster does not control. A pod that escapes the CNI's policy engine still has to get past the firewall. For a product whose defining risk is fetching URLs that strangers chose, two independent enforcement points are worth having — and comparing them is the exercise: one is reconciled by Argo CD inside the cluster boundary, the other is Terraform outside it, and the boundary rule from `v3-gitops` still decides which is which.
+
+The firewall is billed by the hour and is destroyed with the rest of the stack. The management groups and the policy assignments are free and stay.
+
+**What this milestone deliberately does not build.** Subscription vending — the ALZ pattern where Terraform creates a subscription per workload — needs an MCA billing account or an EA enrolment. A personal pay-as-you-go subscription cannot create subscriptions programmatically, so that half of the pattern is read rather than run; what can be practised is the placement side, moving an existing subscription between management groups and applying the policy and RBAC that come with the position. And DDoS Network Protection stays off: it is billed monthly per tenant with no proration worth the name, which makes it the one part of a landing zone that cannot be practised cheaply.
+
+
 ## Status
 
 | Tag | Status |
@@ -208,14 +212,15 @@ Then a deliberate failure exercise: delete a node pool, restore from backup, and
 | `v9-edge` | Not started |
 | `v10-harden` | Not started |
 | `v11-resilient` | Not started |
+| `v12-govern` | Not started |
 
-The table above changes at the end of a milestone only. Thus it holds no detail during a milestone. The next table gives that detail for the milestone in progress.
+That table only moves when a milestone ends, so it says nothing useful while one is underway. The table below carries the detail for the milestone in progress.
 
 ### Inside `v0-bootstrap`
 
 | Step | Work | Status |
 | --- | --- | --- |
-| 1 | The safety rails of the repository. The `.gitignore` file, written before the first apply | Done |
+| 1 | Repository safety rails: the `.gitignore`, in place before anything is applied | Done |
 | 2 | The `bootstrap` module. The Storage Account and state container, applied with local state | Not started |
 | 3 | The `backend` block, and the move of the state into the container | Not started |
 | 4 | The Entra application, with federated credentials for GitHub, a plan identity and an apply identity | Not started |
@@ -223,21 +228,23 @@ The table above changes at the end of a milestone only. Thus it holds no detail 
 | 6 | The subscription baseline. The tag inheritance policy, the resource group layout, the diagnostic defaults | Not started |
 | 7 | The first workflow. `fmt`, `validate`, and `plan` on each pull request | Not started |
 
-Steps 1 to 3 give a state backend that holds its own state. This is the part that each later milestone uses.
+Steps 1 to 3 produce a state backend that stores its own state, which is what every later milestone builds on.
 
-Steps 4 and 7 are one test in two parts. Step 4 makes the identities. Step 7 proves that they work. `v0-bootstrap` is complete when a pull request makes a plan that reads the state from Blob Storage with a federated credential, and no identity in the pipeline holds a client secret.
+Steps 4 and 7 are one test in two halves: step 4 creates the identities, step 7 proves they work. `v0-bootstrap` is complete when a pull request runs a plan that reads state from Blob Storage using a federated credential, and no identity in the pipeline holds a client secret.
 
-Three operations of this milestone are not Terraform code. They are in [RUNBOOK.md](RUNBOOK.md), and one of them is a prerequisite rather than a follow-up: the Entra directory permissions must exist before step 4 can run at all.
+Three operations in this milestone are not Terraform code. They live in [RUNBOOK.md](RUNBOOK.md), and one of them is a prerequisite rather than a follow-up: the Entra directory permissions must exist before step 4 can run at all.
 
 ## Open decisions
 
-These are recorded here because deciding them silently later is how a project acquires configuration it cannot explain.
+Recorded here because deciding them silently later is how a project acquires configuration it cannot explain.
 
 | Decision | Due at | Note |
 | --- | --- | --- |
 | Region | `v0-bootstrap` | Weigh availability-zone support and price against latency, which barely matters here |
-| Python framework | `v2-cluster` | Must be async. See the conditions above |
+| Python framework | `v2-cluster` | Must be async. See the constraints in [README.md](README.md) |
 | Helm charts or plain manifests under `gitops/` | `v3-gitops` | Kustomize is the third option and the one that argues best with a digest-writing pipeline |
 | NGINX canary annotations or the Istio add-on | `v8-progressive` | Traffic splitting for Argo Rollouts |
 | cert-manager or Front Door managed certificates | `v9-edge` | Two valid answers with different failure modes |
 | Whether `gitops/` becomes a second repository | `v4-pipeline` | Decided by whether the path filter holds |
+| Azure Firewall Basic or Standard | `v12-govern` | Basic is roughly a third of the hourly rate and has no DNS proxy, which FQDN-based egress rules need |
+| Whether the tag policy moves to management group scope | `v12-govern` | It belongs there; the question is whether re-pointing it is worth a re-remediation |

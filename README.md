@@ -1,12 +1,12 @@
 # PulseGate
 
-PulseGate is an uptime monitor. You register a URL, it probes that URL on a schedule, and it tells you when the URL stops answering. It is also the application that every piece of infrastructure in this repository exists to serve.
+PulseGate is an uptime monitor. Register a URL and a probe interval; it checks that URL on that interval and tells you when the URL stops answering.
 
-This is the Azure and Kubernetes counterpart to [LinkForge](../linkforge). Same method, different platform: one application, grown one milestone at a time, with the infrastructure design written in prose rather than accumulated as configuration.
+The application is deliberately small. The subject of this repository is the Azure and Kubernetes resource graph underneath it — designed in prose before it is written in code, built one milestone at a time, and never built further ahead than the application can actually use.
 
 ## The product
 
-Three endpoints and two background components.
+Three endpoints:
 
 | Endpoint | Behavior |
 | --- | --- |
@@ -14,49 +14,57 @@ Three endpoints and two background components.
 | `GET /monitors/{id}` | Returns current state, last check time, uptime percentage |
 | `GET /monitors/{id}/checks` | Returns recent check results |
 
+And, once the probe work is split off the request path, three components:
+
 | Component | Kubernetes object | Behavior |
 | --- | --- | --- |
 | `api` | Deployment | The three endpoints above |
 | `scheduler` | CronJob | Every minute, finds monitors that are due and enqueues them |
 | `checker` | Deployment | Pulls from the queue, performs the HTTP probe, writes the result |
 
-That is a few hundred lines of Python. It is boring on purpose. The application is never the subject of this project — the resource graph around it is.
+A few hundred lines of Python, and no more interesting than that. Everything worth reading here starts at the container boundary and works outward.
 
-## Why this product and not a to-do app
+## The problem at the centre of it
 
-The shape of PulseGate is chosen so that Kubernetes is the honest answer rather than the fashionable one. Every primitive in the roadmap has a reason to exist here.
+A service whose whole job is fetching URLs that strangers supply is a server-side request forgery engine by construction. It runs inside a virtual network, and the addresses it can be told to reach include the project's own PostgreSQL server, the Instance Metadata Service at `169.254.169.254`, and every private subnet in the VNet.
 
-| The product needs | Which forces | Milestone |
+Egress control is therefore not a hardening pass bolted on at the end. It is the product's defining constraint, and it shapes the network from the first milestone that has one. `v1-network` puts a NAT Gateway in front of outbound traffic so the platform has a single known, attributable source address. `v10-harden` closes the loop: the checker pods get an egress policy that permits the public internet and denies every RFC 1918 range, the link-local address, and the cluster's own service CIDR. A pod that can reach any public URL and no private one is not what any Kubernetes network gives you by default — it has to be built.
+
+The same property has a second consequence at the edge. `POST /monitors` is a public, unauthenticated write that makes the platform issue an outbound request to an address the caller chose. Rate limiting it in `v9-edge` is a functional requirement, not a nicety.
+
+## Why an uptime monitor, and why Kubernetes
+
+The product was picked so that Kubernetes is the honest answer rather than the fashionable one. Every primitive in the roadmap has a reason to exist here that comes from the product itself.
+
+| What the product needs | What that forces into the design | Milestone |
 | --- | --- | --- |
-| Probes that fire on a fixed schedule | `CronJob` — a first-class Kubernetes object with no ECS equivalent | `v5-state` |
+| Probes that fire on a fixed schedule | `CronJob`, with the concurrency control the platform already enforces | `v5-state` |
 | Probe load that is spiky, not steady | KEDA on queue depth, cluster autoscaler, a Spot node pool | `v6-scale` |
 | Checkers that may be evicted; an API that may not | Two node pools, taints and tolerations, PodDisruptionBudgets | `v6-scale` |
 | Three components that version independently | Argo CD app-of-apps, sync waves | `v3-gitops` |
 | A monitoring product that cannot be down during its own deploy | Argo Rollouts canary, analysis queried from Prometheus | `v8-progressive` |
 | Check results as time series, then as retained history | PostgreSQL, then managed Prometheus, then a retention policy | `v5-state`, `v7-observable` |
-| Outbound HTTP to arbitrary, user-supplied URLs | Controlled egress: NAT Gateway, egress NetworkPolicy, a dedicated egress path | `v1-network`, `v10-harden` |
+| Outbound HTTP to arbitrary, user-supplied URLs | Controlled egress: NAT Gateway, egress NetworkPolicy, then a firewall enforcing the same rule from outside the cluster | `v1-network`, `v10-harden`, `v12-govern` |
 | A public write endpoint that will be abused | Front Door WAF, rate limiting, request validation | `v9-edge` |
 
-The seventh row is the one that makes this product interesting rather than merely convenient. A service whose entire job is to fetch URLs that strangers supply is a server-side request forgery engine by construction. It runs inside your virtual network, and the addresses it can reach include your own database, the Instance Metadata Service at `169.254.169.254`, and every private subnet you own. Egress control is not a checkbox at `v10-harden`; it is the product's core security problem, and the roadmap treats it that way.
+Nothing in that table is there because it would look good in a diagram. Remove the product and every row loses its justification.
 
-## Why Kubernetes here, when LinkForge chose ECS
+## What it costs to keep this affordable
 
-LinkForge rejected EKS on cost. The EKS control plane bills about $73 a month whether or not anything is running, which defeats a project built on destroying its infrastructure at the end of every session. That reasoning was correct, and it does not carry over.
+The method here is to stand the infrastructure up, work on it, and tear it down again — which only works if there is no large fixed monthly floor underneath. A managed Kubernetes service that bills for its control plane by the month puts exactly such a floor in place, and the nightly teardown becomes theatre.
 
-AKS has a Free tier where the control plane costs nothing. There is no uptime SLA on that tier, which is the correct trade for a project that is torn down nightly and has no users. On top of that, `az aks stop` deallocates the node pool virtual machines and leaves the cluster object in place, so the daily shutdown is a single command instead of a full destroy and rebuild.
+AKS prices the control plane by tier and the bottom tier is free. There is no uptime SLA on that tier, which is the right trade for a cluster with no users that spends most of its life deallocated. `az aks stop` deallocates the node pool VMs and leaves the cluster object behind, so a pause between sessions is one command rather than a rebuild. [COST.md](COST.md) carries the numbers and the difference between stopping and destroying.
 
-So the constraint that made Kubernetes the wrong answer on AWS does not exist on Azure. That is the entire premise of this repository, and it is worth stating plainly rather than leaving it as an unexamined preference.
+Two Azure specifics shape the design and are noted where they land:
 
-Two other differences shape the design and are noted where they land:
+- **Identity.** Entra Workload Identity federates a Kubernetes ServiceAccount token to a managed identity, so a pod reaches the database or the vault with no stored credential anywhere. It costs nothing, and `v2-cluster` turns it on before anything needs it, because enabling it later is a cluster update you would rather not have to schedule.
+- **Secrets.** Key Vault charges per operation and nothing for the vault itself. The vault therefore does not have to be destroyed nightly to keep the project cheap, and holding secrets adds no permanent monthly floor.
 
-- **Identity.** AWS gave LinkForge IAM roles for service accounts. Azure gives Entra Workload Identity, which federates a Kubernetes ServiceAccount token to a managed identity. Same idea, different failure modes, and it is free.
-- **Secrets.** AWS charges a dollar per KMS key per month, which is why LinkForge tracks a minimum cost that only ever goes up. Azure Key Vault charges per operation and nothing for the vault, so the equivalent line in this project's cost model behaves differently.
+## Where the application fits
 
-## When the application gets written
+The application shows up in `v2-cluster`, the first milestone that has a registry and a cluster. A registry with no image to store and a scheduler with no pods to run are not worth building. Before that, `v1-network` proves out private subnets and private access against a host that answers `/healthz` and nothing else.
 
-`v2-cluster`. That is the first milestone with a registry and a cluster, and a registry with no image to store and a scheduler with no pods to run are not worth building. Before that, `v1-network` proves out private subnets and private access against a host that answers `/healthz` and nothing else.
-
-The code then arrives in the order the infrastructure can support it.
+From there the code arrives in whatever order the infrastructure can support.
 
 | Milestone | The application | Deployed by |
 | --- | --- | --- |
@@ -68,29 +76,23 @@ The code then arrives in the order the infrastructure can support it.
 | `v6-scale` | The checker becomes horizontally elastic | GitHub Actions, then Argo CD |
 | `v8-progressive` | A `/metrics` endpoint the canary analysis can query | GitHub Actions, then Argo Rollouts |
 
-It stays a stub until `v5-state` for an honest reason: there is no store to write to, so `POST /monitors` cannot persist anything before then, and no queue to enqueue to, so the scheduler and checker have nothing to talk through.
+It stays a stub until `v5-state`, and the reason is honest rather than tidy: there is no store, so `POST /monitors` has nowhere to persist a monitor, and no queue, so the scheduler and checker have nothing to talk through.
 
-The split at `v5-state` is the one change carrying real design weight. Up to that point PulseGate is one process. After it, the probe work leaves the request path entirely: the CronJob only enqueues, the checkers only consume, and the API only reads what they wrote. This is what makes the checker fleet independently scalable at `v6-scale`, and it is the whole reason the product is worth putting on Kubernetes.
+`v5-state` is the change that carries real design weight. Before it, PulseGate is one process. After it, the probe work has left the request path entirely — the CronJob only enqueues, the checkers only consume, the API only reads what they wrote. That separation is what makes the checker fleet independently scalable in `v6-scale`, and it is the reason the product belongs on Kubernetes at all.
 
-Building more application than the infrastructure can currently serve is exactly the failure mode this ordering exists to prevent.
+Writing more application than the infrastructure can currently carry is the specific failure this ordering exists to prevent.
 
-## About the application
+## What the infrastructure asks of the application
 
-The application is Python. The framework choice is deferred to `v2-cluster` and matters in five ways only:
+The language is Python. The framework is chosen in `v2-cluster`, and only five properties matter to anything outside the container:
 
-- It must expose `/healthz` for the liveness probe and `/readyz` for the readiness probe, and these must be different routes. Readiness may check the database; liveness must not. A liveness probe that fails when PostgreSQL is slow will restart every healthy pod in the cluster at the worst possible moment.
-- It must listen on the port the container spec declares.
-- It must be async. The checker's entire job is waiting on remote HTTP; a synchronous worker blocks on every probe.
-- It must run one process per container, so CPU stays a clean autoscaling signal.
-- It must exit cleanly on `SIGTERM` and finish the in-flight probe first, because `v6-scale` puts checkers on Spot nodes that get thirty seconds of notice.
+- Separate `/healthz` and `/readyz` routes. Readiness may check the database; liveness must not. A liveness probe that fails when PostgreSQL is slow restarts every healthy pod in the cluster at the worst possible moment.
+- It listens on the port the container spec declares.
+- It is async. The checker's entire job is waiting on remote HTTP, and a synchronous worker blocks on every probe.
+- One process per container, so CPU stays a clean autoscaling signal.
+- It handles `SIGTERM`: stop taking work, finish the in-flight probe, exit. `v6-scale` puts checkers on Spot nodes, and a Spot eviction gives thirty seconds of notice.
 
-The container image is the real interface between the application and everything in this repository. Nothing downstream of the registry knows or cares what is inside it, which is also what makes a later change of language cheap.
-
-## How this repository grows
-
-PulseGate starts as one container on a cluster and ends as a multi-region, GitOps-reconciled, progressively-delivered, policy-governed platform. Each milestone adds only the infrastructure the application needs at that point. The shared foundations — state backend, identity federation, network, build, deploy path — are paid for once, in `v0-bootstrap`.
-
-See [ROADMAP.md](ROADMAP.md) for the milestone list and current status, [COST.md](COST.md) for the cost model that governs what gets built, and [RUNBOOK.md](RUNBOOK.md) for the operations that have no Terraform resource.
+The container image is the real interface between the application and everything else here. Nothing downstream of the registry knows what is inside it, which is also what would make a later change of language cheap.
 
 ## Repository layout
 
@@ -102,20 +104,24 @@ apps/         Application source and Dockerfiles.
 .github/      Workflows.
 ```
 
-The seam between `platform/` and `gitops/` is deliberate and is defined at `v3-gitops`. Terraform stops at the cluster boundary. It creates the cluster, the registry, the databases, the identities, and the DNS records — and then it stops. Everything that lives *inside* the cluster is a manifest under `gitops/`, reconciled by Argo CD, and Terraform never applies it.
+The seam between `platform/` and `gitops/` is deliberate and is defined in `v3-gitops`. Terraform stops at the cluster boundary: it creates the cluster, the registry, the databases, the identities, and the DNS records, and then it stops. Everything that lives *inside* the cluster is a manifest under `gitops/`, reconciled by Argo CD, and Terraform never applies it.
 
-The one exception is Argo CD itself, which cannot install itself. That bootstrap problem, and the reasoning for how it is solved, belongs to `v3-gitops`.
+The one exception is Argo CD itself, which cannot install itself. That bootstrap problem, and the reasoning behind how it is solved, belongs to `v3-gitops`.
 
-`gitops/` sits in this repository rather than a second one. The canonical Argo CD guidance is to split application source from deployment configuration, and the reason is real: CI writing an image tag back into the same repository can retrigger CI. The single repository is chosen anyway, because the loop is cheap to break with a path filter and the split costs the project a coherent narrative. If the retrigger problem turns out to be worse than expected, `v4-pipeline` is where it will show, and the split is a cheap change at that point.
+`gitops/` sits in this repository rather than a second one. The canonical Argo CD guidance is to split application source from deployment configuration, and its reason is real: CI writing an image tag back into the same repository can retrigger CI. The single repository is chosen anyway, because the loop is cheap to break with a path filter and the split costs the project a coherent narrative. If the retrigger problem turns out worse than expected, `v4-pipeline` is where it will show, and splitting is a cheap change at that point.
 
-## What exists today
+## Where the project stands
 
-Nothing. `v0-bootstrap` has not started.
+Nothing is built. `v0-bootstrap` has not started.
 
-This repository currently holds its documentation and its `.gitignore`, in that order and on purpose. LinkForge's first lesson was that the ignore file must exist before the first `terraform apply`, not after, and that lesson transfers without modification.
+What exists is the documentation and the `.gitignore`, in that order and on purpose — the ignore file has to be right before the first `terraform apply`, not after it. State files and plan files both carry resource attributes in plaintext, and a secret that reaches a commit is disclosed whether or not the next commit removes it.
 
-`v0-bootstrap` is done when a pull request can plan against remote state in Azure Blob Storage using a federated credential that exists only for the life of the job, and no identity in the pipeline holds a client secret.
+`v0-bootstrap` is finished when a pull request can plan against remote state in Azure Blob Storage using a federated credential that exists only for the life of the job, and no identity in the pipeline holds a client secret.
 
-## About the infrastructure code
+## How these documents work
 
-The design is described in prose: which resources, how they connect, and which arguments matter. It is not copy-paste HCL or YAML. The purpose is to build the mental model of the resource graph, not to accumulate configuration.
+The infrastructure is described in prose: which resources, how they connect, which arguments matter and why. It is not copy-paste HCL or YAML, because the goal is a mental model of the resource graph rather than a pile of configuration.
+
+- [ROADMAP.md](ROADMAP.md) — the thirteen milestones, what each one builds, and current status.
+- [COST.md](COST.md) — the cost model that governs what gets built and what gets refused.
+- [RUNBOOK.md](RUNBOOK.md) — the operations that have no Terraform resource.

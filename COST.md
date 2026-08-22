@@ -1,37 +1,37 @@
 # PulseGate: Cost Model
 
-This project creates infrastructure and destroys it each day. Thus you must know which costs the destroy operation removes. Many costs do not stop when you destroy the stack.
+This platform gets built, worked on, and torn down again — often several times a week. That method only pays off if you know which costs the teardown actually removes, and a surprising number of them survive it.
 
-This file is the cost part of `v0-bootstrap`. The budget resources control the cost. This file gives the reasons for the budget values.
+This file is the reasoning behind the budget resources in `v0-bootstrap`. The budget enforces a number; this file explains where the number comes from.
 
-## Two terms
+## Two numbers to keep apart
 
 | Term | Meaning |
 | --- | --- |
-| Standing cost | The cost for one month, if the resources operate for all of that month |
+| Standing cost | What a month costs if everything stays up for the whole of it |
 | Minimum cost | The cost for one month, after you destroy the stack |
 
-The minimum cost is the cost of PulseGate in a month with no work. The minimum cost increases only when you add a resource that the destroy operation does not remove.
+The minimum cost is what PulseGate costs in a month where no work happens at all. It only moves when a resource is added that the destroy does not take with it.
 
-## Three classes of cost
+## Three kinds of cost on the bill
 
-Each cost on the bill is in one of three classes. The class controls how you manage the cost. The size of the cost does not control this.
+Every line on the invoice falls into one of three kinds, and the kind — not the size — decides how it is managed.
 
-| Class | Behavior | How to manage it |
+| Kind | Behavior | How to manage it |
 | --- | --- | --- |
-| Hourly cost | You pay for each hour that the resource exists. Use does not change this cost | Stop or destroy the stack each day |
-| Use cost | You pay for each request, each GB, and each ingested log line | Set retention. Log ingestion is the one that grows |
-| Remaining cost | You pay each month after the destroy operation, because the stack does not contain the resource | Delete the resource, or accept the cost |
+| Hourly cost | You pay for each hour the resource exists. Use does not change it | Stop or destroy the stack each day |
+| Use cost | You pay per request, per GB, per ingested log line | Set retention. Log ingestion is the one that runs away |
+| Remaining cost | You keep paying after the destroy, because the stack never contained the resource | Delete it deliberately, or accept it |
 
-The third class is the reason for this file. The NAT Gateway costs about $33 each month, and it is the largest number in the early milestones. It is also the safest, because the destroy operation removes it every evening.
+The third kind is why this file exists. The NAT Gateway at roughly $33 a month is the biggest number in the early milestones and also the least dangerous, because the nightly destroy removes it every time.
 
-The costs that cause a problem are small: a DNS zone, a registry, a Log Analytics workspace with no retention policy, a backup vault. You do not destroy these, because they are not the subject of your work.
+The costs that actually cause trouble are small ones: a DNS zone, a registry, a Log Analytics workspace with no retention policy, a backup vault. They survive because they were never the subject of the work in the first place.
 
-## The premise: why this project can use Kubernetes at all
+## The premise: the control plane is free
 
-LinkForge rejected EKS because the control plane bills about $73 each month whether or not anything runs. A daily destroy cannot make that cheap.
+A managed Kubernetes service that bills a fixed monthly amount for its control plane sets a floor under the bill that no shutdown reaches. A project built on destroying its infrastructure every evening would pay that floor for the privilege of running nothing.
 
-AKS does not have that number.
+AKS prices the control plane by tier, and the bottom tier costs nothing.
 
 | Tier | Control plane | SLA |
 | --- | --- | --- |
@@ -39,13 +39,13 @@ AKS does not have that number.
 | Standard | About $0.10 each hour, so about $73 each month | 99.9%, or 99.95% with availability zones |
 | Premium | About $0.60 each hour | Standard's SLA, plus long-term support |
 
-This project uses the Free tier through `v11-resilient`. There are no users, and an SLA protects revenue that does not exist. Milestone `v11-resilient` examines the Standard tier as a design question, not as a purchase.
+This project uses the Free tier through `v11-resilient`. There are no users, and an SLA protects revenue that does not exist. `v11-resilient` examines the Standard tier as a design question, not as a purchase.
 
-This single row is the reason this repository exists next to LinkForge instead of inside it.
+That first row is what makes every other number here matter. With the control plane free, every remaining cost belongs to a resource that can be stopped.
 
 ## Two ways to stop paying
 
-Azure gives this project a second option that AWS did not.
+The stack can be destroyed, or the cluster can be stopped. These are not the same thing.
 
 | Method | Command | What stops | What still bills |
 | --- | --- | --- | --- |
@@ -84,65 +84,87 @@ These are approximate values for `East US`, and they are not exact prices. Treat
 | Azure Front Door, Premium | A much larger base charge | About $330. Managed WAF rule sets need this tier |
 | Azure DNS, public zone | About $0.50 for each zone each month, plus queries | About $0.50. A remaining cost |
 | Azure Bastion, Basic | About $0.19 each hour | About $140. Not used. See below |
+| Azure Firewall, Basic | About $0.395 each hour, plus data processing | About $290. Hourly, so a session costs under a dollar |
+| Azure Firewall, Standard | About $1.25 each hour, and about $0.016 for each GB | About $910. Same shape: trivial per session, ruinous if left up |
+| VPN Gateway, VpnGw1 | About $0.19 each hour | About $140. Nothing in this project has anything to connect to |
+| DDoS Network Protection | About $2,944 each month, per tenant | Monthly, not hourly. Refused. See below |
+| DDoS IP Protection | About $199 each month, for each public IP | Monthly. Also refused |
+| Management groups, policy assignments, RBAC | No charge | $0. The governance half of a landing zone is free |
 | Defender for Containers | Per vCPU each month | Scales with the node count |
 | Azure Policy, built-in definitions | No charge | $0 |
 | KEDA, Workload Identity, app routing add-ons | No charge for the add-on | $0. You pay for what they create |
 | GitHub Actions, public repository | No charge | $0 |
 
-When you complete a milestone, get the true cost from Cost Analysis and replace the value in the next table. An estimate that you compare with the true bill has much more value than an estimate that you do not compare.
+At the end of each milestone, pull the real figure out of Cost Analysis and overwrite the estimate below. An estimate nobody checks against the invoice is worth very little.
 
-## Three resources this project refuses to buy
+## Four resources this project refuses to buy
 
 **Azure Bastion**, at about $140 each month, is the obvious way to reach a private host and it is nine times the cost of everything else in `v1-network` combined. `az ssh` with Entra authentication and `az vm run-command` reach the same host for nothing. Bastion earns its price when a team needs audited RDP and SSH at scale. One person proving that a subnet is private is not that.
 
-**Azure Managed Grafana**, at about $65 each month, is a per-hour charge for a dashboard server. Grafana runs in the cluster for free, and a cluster-hosted Grafana is reconciled by Argo CD like everything else, which is more on-theme than a resource Terraform creates outside the boundary. Milestone `v7-observable` takes the self-hosted path and records the managed service as considered.
+**Azure Managed Grafana**, at about $65 each month, is a per-hour charge for a dashboard server. Grafana runs in the cluster for free, and a cluster-hosted Grafana is reconciled by Argo CD like everything else, which is more on-theme than a resource Terraform creates outside the boundary. `v7-observable` takes the self-hosted path and records the managed service as considered.
 
 **Front Door Premium**, at about $330 each month, buys the Microsoft-managed WAF rule sets. Front Door Standard supports custom WAF rules, and the rule this product actually needs — a rate limit on `POST /monitors` — is a custom rule. `v9-edge` uses Standard.
 
-The same test applies to every future decision: prefer the resource whose cost stops when the resource stops.
+**DDoS Network Protection**, at about $2,944 each month per tenant, is the only resource named in this file that the daily destroy cannot help with. It is billed monthly, not hourly, and it is billed at the tenant rather than at the resource, so there is no two-hour version of it and no way to try it once. `v12-govern` builds the rest of a landing zone and leaves this out, which means the DDoS row on a Well-Architected review stays a paragraph of reasoning rather than a deployed resource. That is the honest outcome and it is recorded as such.
+
+The same test applies to every future decision: prefer the resource whose cost stops when the resource stops. Where a resource cannot be stopped, prefer reading about it to owning it.
 
 ## Cost of each milestone
 
-| Milestone | Largest cost | Standing cost | Minimum cost | Notes |
+| Milestone | Biggest line item | Standing cost | Minimum cost | Notes |
 | --- | --- | --- | --- | --- |
 | `v0-bootstrap` | Storage, federation, budget | About $0 | About $0 | The state blobs are tiny. Federated credentials and budget alerts are free |
 | `v1-network` | NAT Gateway, public IPs | About $40 | $0 | All hourly. The destroy removes all of it |
 | `v2-cluster` | Node pool VMs, load balancer, ACR | About $110 | **About $5** | The first permanent step. ACR Basic bills whether or not you pull |
 | `v3-gitops` | Argo CD's own pods | About $0 extra | $0 | Argo CD is software in a cluster you already pay for |
 | `v4-pipeline` | GitHub Actions | About $0 | $0 | Free for a public repository. Image layers in ACR grow the Basic tier toward its included quota |
-| `v5-state` | PostgreSQL, Service Bus | About $25 extra | Low | Key Vault costs nothing to hold. This is where Azure and AWS diverge most |
+| `v5-state` | PostgreSQL, Service Bus | About $25 extra | Low | Key Vault costs nothing to hold, so the data milestone adds almost nothing permanent |
 | `v6-scale` | Node pool VMs | **Falls** | $5 | Spot capacity and scale-to-zero make the checker fleet cheaper than the fixed replicas it replaces |
 | `v7-observable` | Log ingestion | Low, and it grows | **Yes** | Container Insights ingests continuously. Set the tier and the retention when you create the workspace, not after |
 | `v8-progressive` | Extra canary replicas | About $0 extra | $0 | A canary runs a second ReplicaSet for minutes at a time |
-| `v9-edge` | Front Door, DNS zone | About $40 extra | **Yes** | The DNS zone and the Front Door profile are not destroyed nightly. The domain registration is a separate annual cost |
+| `v9-edge` | Front Door, DNS zone | About $40 extra | **Yes** | The DNS zone and the Front Door profile survive the nightly destroy. The domain itself renews annually and is billed elsewhere |
 | `v10-harden` | Defender for Containers | Low | Low | Priced per vCPU, so it tracks the node count. Policy and NetworkPolicy are free |
 | `v11-resilient` | The second region, backup storage | **High** | **Yes** | A warm region and a Premium registry are the two largest permanent additions in the project |
+| `v12-govern` | Azure Firewall | About $290 to $910 if left up | **About $0** | The unusual row. The permanent half — management groups, policy, RBAC — is free; the expensive half is hourly and dies with the stack |
 
-Two different shapes are in this table. The standing cost rises at `v2-cluster`, falls at `v6-scale` when Spot and scale-to-zero arrive, and rises sharply at `v11-resilient`. The minimum cost rises in small permanent steps, and it starts earlier than LinkForge's did — at `v2-cluster` with the registry rather than at `v5-state` with the vault, because Azure charges for the registry and does not charge for the vault.
+Two different shapes are in this table. The standing cost rises at `v2-cluster`, falls at `v6-scale` when Spot and scale-to-zero arrive, and rises sharply at `v11-resilient` before `v12-govern` adds the most expensive hourly resource in the project. The minimum cost rises in small permanent steps, and the first of them lands earlier than you would guess: at `v2-cluster`, with the registry. It is the registry that sets the floor, not the vault and not the database, because Azure bills a registry by the day and a vault not at all.
 
-## The value of the daily destroy
+## What the daily teardown is worth
 
-Milestones `v1-network` through `v4-pipeline` have a standing cost of about $110 each month. Their minimum cost is about $5. If you run this infrastructure for two hours each day, the cost is roughly $10 to $15 each month.
+From `v1-network` through `v4-pipeline` the standing cost is about $110 a month against a minimum of about $5. Run that infrastructure two hours a day and the bill lands somewhere around $10 to $15.
 
-That ratio is the entire argument for the daily destroy, and it is the same argument LinkForge made. The difference is that on Azure the ratio survives contact with Kubernetes, because the control plane is not a fixed monthly floor.
+That ratio is the whole argument for tearing down, and it survives only because the control plane is not a fixed monthly floor. If it were, a two-hour day and a full day would cost nearly the same and there would be no reason to destroy anything.
 
-## The budget in `v0-bootstrap`
+## Where a landing zone hides its cost
 
-Step 5 creates one monthly consumption budget for the whole subscription, with an action group that sends email. It alerts at 50% and 80% of actual cost, and at 100% of forecast cost. It does not create one budget for each milestone.
+`v12-govern` looks like it should be the most expensive milestone here and it is not, because Azure Landing Zones divides along the same line this file already uses.
 
-Azure does not charge for budget alerts, so price is not the reason. The reason is the quality of the alert. Twelve budgets give twelve alerts, each one small, and soon you ignore all of them. One subscription budget answers the only question that matters: is this month different from the last one?
+| Half | What it is | Cost class |
+| --- | --- | --- |
+| Governance | Management groups, policy definitions and assignments, RBAC, subscription placement, tags, budgets | Free, and permanent |
+| Connectivity | Hub VNet, Azure Firewall, VPN or ExpressRoute gateway, DDoS | Hourly, except DDoS |
 
-Cost Analysis answers the per-milestone question, and it uses the tags. A budget cannot do that.
+The permanent half costs nothing, which is the opposite of the intuition. A full management group hierarchy with the ALZ policy initiatives assigned across it can stand in the tenant forever at zero cost, and compliance evaluation is free as well. The half that costs money is the half that can be destroyed nightly — a firewall run for a two-hour session is under three dollars even on the Standard tier.
 
-The budget must alert only. Azure budgets can trigger an action group that runs an automation runbook, and that runbook could shut things down. That function is wrong for this project: it adds an automatic destroy to an account you are using to learn, and a learning environment that deletes itself at an unpredictable moment teaches the wrong lesson. Examine it again at `v10-harden`, where a second budget scoped to the platform resource group is added.
+The real exposure is neither. It is the `deployIfNotExists` and `modify` policies inside the ALZ initiative, which are free to assign and expensive to remediate. Run a remediation task against the shipped defaults and the policies will enable paid Defender for Cloud plans across the subscription, create a Log Analytics workspace, and route diagnostic settings from every resource into it. All three are remaining costs: they begin without an apply and no destroy removes them.
 
-## Tags, and the way Azure differs here
+So the sequence in `v12-govern` is fixed. Assign with `enforcementMode` set to `DoNotEnforce`, read the compliance report, set the Defender and workspace parameters off deliberately, and only then enforce policy by policy. A landing zone assigned carelessly is the fastest way this project could acquire a permanent monthly bill.
+
+## One budget, not thirteen
+
+Step 5 of `v0-bootstrap` creates a single monthly consumption budget across the subscription, with an action group that sends email, alerting at 50% and 80% of actual cost and at 100% of forecast.
+
+Azure does not charge for budget alerts, so cost is not the argument against per-milestone budgets — alert quality is. Thirteen small budgets produce thirteen small alerts, and thirteen small alerts get ignored as a set. One subscription-wide budget answers the only question worth waking up for: is this month different from the last one? Per-milestone attribution is Cost Analysis's job, and it does it with the tags.
+
+The budget alerts and does nothing else. Azure budgets can trigger an action group that runs an automation runbook, and that runbook could shut resources down — which is the wrong behavior for an environment being used to learn. Infrastructure that deletes itself at an unpredictable moment teaches the wrong lesson. `v10-harden` revisits the question alongside a second budget scoped to the platform resource group.
+
+## Tags, and why they do not stick
 
 The tag set is `Project`, `Environment`, `ManagedBy`, and `Milestone`. The `Milestone` tag is the important one. It makes Cost Analysis show the cost of each milestone.
 
-Azure has no activation step. AWS required you to enable Cost Explorer, wait a day for a tag key to appear, activate it, and wait another day. Azure Cost Analysis groups by tag with no setup, so the three-day sequence that opened LinkForge's runbook does not exist here.
+Cost Analysis groups by tag with no setup and no activation step, so nothing here waits on the billing system to notice that a tag key exists.
 
-Azure has a different problem instead, and it is worse: **tags do not inherit.** A tag on a resource group does not appear on the resources inside it, and a resource created by another resource — a node pool virtual machine, a managed disk, a load balancer in the `MC_` resource group — carries whatever tags its creator gave it, which is usually none. On a Kubernetes project this is not a corner case. Most of the bill is generated by resources AKS created, not by resources Terraform created.
+The problem is elsewhere, and on a Kubernetes project it is a bad one: **tags do not inherit.** A tag on a resource group does not appear on the resources inside it, and a resource created by another resource — a node pool virtual machine, a managed disk, a load balancer in the `MC_` resource group — carries whatever tags its creator gave it, which is usually none. On a Kubernetes project this is not a corner case. Most of the bill is generated by resources AKS created, not by resources Terraform created.
 
 Two mechanisms address it, and `v0-bootstrap` uses both:
 
@@ -151,10 +173,10 @@ Two mechanisms address it, and `v0-bootstrap` uses both:
 
 Neither is retroactive. A policy with a `modify` effect corrects existing resources only when you run a remediation task, and the cost record for a day when a resource was untagged stays untagged forever.
 
-## Rules
+## Standing rules
 
 1. Set the tier and the retention period on the Log Analytics workspace when you create it. The default retention is not the cheapest one, and log ingestion is the only cost in this project that grows without you doing anything.
-2. Destroy the stack at the end of each session. From `v2-cluster`, this is the difference between a small bill and a large one.
+2. Tear the stack down when a session ends. From `v2-cluster` onward, that habit is the difference between a small bill and a large one.
 3. Check the minimum cost each month. In a week with no work, the bill must stay flat. If it does not, a resource exists outside the stack — look first in the `MC_` node resource group, which is where AKS puts the things you did not declare.
 4. When you complete a milestone, record the true cost from Cost Analysis and replace the estimate in the table above.
-5. Before adding any resource, ask which of the three classes it belongs to. If the answer is "remaining", say out loud what it costs each month forever.
+5. Before adding any resource, ask which of the three kinds it belongs to. If the answer is "remaining", say out loud what it costs each month forever.
