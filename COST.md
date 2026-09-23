@@ -4,6 +4,8 @@ This platform gets built, worked on, and torn down again, often several times a 
 
 This file is the reasoning behind the budget resources in `v0-bootstrap`. The budget enforces a number; this file explains where the number comes from.
 
+Every hourly figure below is **per environment**. There are three — `dev`, `stage`, `prod` — and the rule that keeps that from tripling the bill is that only `dev` plus one other is ever up at once. The shared half — state backend, identities, and a registry that is not an Azure resource — is deliberately the permanent half, and it costs almost nothing.
+
 ## Two numbers, three kinds of cost
 
 | Term | Meaning |
@@ -21,7 +23,7 @@ Every line on the invoice is one of three kinds, and the kind — not the size �
 | Use | You pay per request, per GB, per ingested log line | Set retention. Log ingestion is the one that runs away |
 | Remaining | You keep paying after the destroy, because the stack never contained the resource | Delete it deliberately, or accept it |
 
-The third kind is why this file exists. The NAT Gateway at ~$33 a month is the biggest number in the early milestones and the least dangerous, because the destroy removes it every time. The ones that cause trouble are small: a DNS zone, a registry, a Log Analytics workspace with no retention policy, a backup vault. They survive because they were never the subject of the work.
+The third kind is why this file exists. The NAT Gateway at ~$33 a month is the biggest number in the early milestones and the least dangerous, because the destroy removes it every time. The ones that cause trouble are small: a registry, a Log Analytics workspace with no retention policy, a backup vault. They survive because they were never the subject of the work.
 
 ## The premise: the control plane is free
 
@@ -35,8 +37,8 @@ That is what makes every other number here matter. With the control plane free, 
 
 | Method | Command | What stops | What still bills |
 | --- | --- | --- | --- |
-| Destroy | `terraform destroy` | Everything in the stack | Nothing in the stack |
-| Stop | `az aks stop` | The node pool VMs deallocate | OS disks, persistent volumes, the load balancer, the public IPs, the NAT Gateway |
+| Destroy | `terragrunt run-all destroy` | Everything in that environment | Nothing in that environment |
+| Stop | `az aks stop` | That cluster's node pool VMs deallocate | OS disks, persistent volumes, the load balancer, the public IPs, the NAT Gateway |
 
 Stopping keeps the cluster object, the pool configuration, and anything in the cluster that is not in Git — which is exactly why destroy is the default: the point of `v3-gitops` is that the cluster can be thrown away and rebuilt from the repository. Use stop for a break inside a session, destroy at the end of one.
 
@@ -58,8 +60,7 @@ PostgreSQL Flexible Server has the same option and a hard limit: stopped for sev
 | Public IPv4, standard static | $0.005/hr each | ~$3.60 each |
 | Node pool VMs | Size and count decide it | The largest variable cost |
 | Spot VMs | Up to 90% below on-demand | Near zero for a fleet that scales to zero |
-| ACR Basic | $0.167/day | ~$5 |
-| ACR Premium | $1.667/day | ~$50. Needed for geo-replication in `v11-resilient` |
+| Container registry, `ghcr.io` | Nothing for public packages | $0. Azure Container Registry has no free tier; Basic would be ~$5 |
 | Key Vault, standard | Nothing for the vault; $0.03 per 10,000 operations | ~$0 |
 | PostgreSQL Flexible, B1ms | $0.017/hr + ~$0.115/GB storage | ~$12, plus storage |
 | Service Bus, Basic | $0.05 per million operations | ~$0 |
@@ -68,7 +69,6 @@ PostgreSQL Flexible Server has the same option and a hard limit: stopped for sev
 | Log Analytics, Basic logs | $0.65/GB ingested | Correct for container stdout |
 | Log Analytics, extended retention | $0.12/GB/month | A remaining cost |
 | Front Door, Standard | Monthly base + data and requests | ~$35 |
-| Azure DNS, public zone | $0.50/zone/month + queries | ~$0.50. A remaining cost |
 | Azure Firewall, Basic | $0.395/hr + data processing | ~$290. Hourly, so a session costs under a dollar |
 | Azure Firewall, Standard | $1.25/hr + $0.016/GB | ~$910. Same shape: trivial per session, ruinous if left up |
 | Defender for Containers | Per vCPU per month | Tracks the node count |
@@ -104,7 +104,15 @@ Read on subscription `<subscription-id>`, identical across every region consider
 | `Standard BS Family` vCPUs | 10 | The B-series, which is what this leaves available |
 | `Standard DSv5 Family` vCPUs | **0** | `Standard_D2s_v5` cannot be allocated at all |
 
-So `Standard_B2s` is the node SKU by default rather than by preference, ten vCPUs allows about five of them across all pools, and three low-priority vCPUs is **one** Spot node — meaning `v6-scale` can show that KEDA scales the checker fleet on queue depth without showing it scale to anything.
+So `Standard_B2s` is the node SKU by default rather than by preference. With a system and a user pool at one node each, **an environment costs four vCPUs**:
+
+| Environments up | vCPUs | Fits in 10? |
+| --- | --- | --- |
+| `dev` alone | 4 | Yes, with six spare |
+| `dev` + one of `stage` / `prod` | 8 | Yes, with two spare |
+| All three | 12 | **No** |
+
+That is the real reason only two environments are ever up together, and it binds before the budget does. Three low-priority vCPUs is **one** Spot node across the whole subscription, so `v6-scale` can show that KEDA scales the checker fleet on queue depth without showing it scale to anything, and only in one environment at a time.
 
 Quota increases are free and usually granted in a day or two. File the request well before `v6-scale` needs it.
 
@@ -114,21 +122,56 @@ Quota increases are free and usually granted in a day or two. File the request w
 | --- | --- | --- | --- | --- |
 | `v0-bootstrap` | Storage, federation, budget | ~$0 | ~$0 | State blobs are tiny. Federated credentials and budget alerts are free |
 | `v1-network` | NAT Gateway, public IPs | ~$40 | $0 | All hourly. The destroy removes all of it |
-| `v2-cluster` | Node pool VMs, load balancer, ACR | ~$110 | **~$5** | The first permanent step. ACR Basic bills whether or not you pull |
+| `v2-cluster` | Node pool VMs, load balancer | ~$110 | ~$0 | All hourly. The registry is `ghcr.io` and free, so nothing permanent is added here |
 | `v3-gitops` | Argo CD's own pods | ~$0 extra | $0 | Software in a cluster you already pay for |
-| `v4-pipeline` | GitHub Actions | ~$0 | $0 | Free for a public repository. Image layers push ACR Basic toward its included quota |
+| `v4-pipeline` | GitHub Actions | ~$0 | $0 | Free for a public repository, and so is the registry it pushes to |
 | `v5-state` | PostgreSQL, Service Bus | ~$25 extra | Low | Key Vault costs nothing to hold, so the data milestone adds almost nothing permanent |
 | `v6-scale` | Node pool VMs | **Falls** | $5 | Spot and scale-to-zero beat the fixed replicas they replace |
 | `v7-observable` | Log ingestion | Low, and it grows | **Yes** | Container Insights ingests continuously. Set tier and retention at creation, not after |
 | `v8-progressive` | Extra canary replicas | ~$0 extra | $0 | A second ReplicaSet for minutes at a time |
-| `v9-edge` | Front Door, DNS zone | ~$40 extra | **Yes** | Both survive the nightly destroy. The domain renews annually and is billed elsewhere |
+| `v9-edge` | Front Door | ~$35 extra | **Yes** | The profile survives the destroy. No DNS zone and no domain: the default endpoint hostname is used instead |
 | `v10-harden` | Defender for Containers | Low | Low | Per vCPU, so it tracks the node count. Policy and NetworkPolicy are free |
-| `v11-resilient` | Second region, backup storage | **High** | **Yes** | A warm region and a Premium registry are the largest permanent additions in the project |
+| `v11-resilient` | Second region, backup storage | **High** | **Yes** | A warm second region is the largest permanent addition in the project |
 | `v12-govern` | Azure Firewall | ~$290–910 if left up | **~$0** | The permanent half — management groups, policy, RBAC — is free; the expensive half is hourly and dies with the stack |
 
-Two shapes are in that table. Standing cost rises at `v2-cluster`, **falls** at `v6-scale`, and rises sharply at `v11-resilient`. Minimum cost rises in small permanent steps, and the first lands earlier than you would guess — at `v2-cluster`, with the registry. It is the registry that sets the floor, not the vault and not the database, because Azure bills a registry by the day and a vault not at all.
+Those are **per-environment** figures. The minimum column is not: it is shared.
 
-From `v1-network` through `v4-pipeline` the standing cost is about $110 against a minimum of about $5. Run it two hours a day and the bill lands around $10 to $15. That ratio is the whole argument for tearing down, and it survives only because the control plane is not a fixed monthly floor.
+Two shapes are in the table. Standing cost rises at `v2-cluster`, **falls** at `v6-scale`, and rises sharply at `v11-resilient`. Minimum cost stays at essentially zero for far longer than it would have — the state blobs are cents and the registry is free — and the first real permanent charge is **`v9-edge`**, with the Front Door profile. That is worth holding onto: through nine of thirteen milestones, a month with no work costs nothing.
+
+From `v1-network` through `v4-pipeline`, `dev` alone stands at about $110 a month against a shared minimum of about $5. At the working pattern this project actually has — **one hour a day** — that becomes:
+
+A session is about an hour in `dev`, plus roughly half an hour of build and destroy around it. `stage` and `prod` add under an hour a week between them. The cadence is irregular — this competes with other work — so the bill is a range rather than a number:
+
+| Sessions | `dev` hours a month | `dev` | `stage`/`prod` | **Total** |
+| --- | --- | --- | --- | --- |
+| Every day | 45 | $6.86 | ~$1 | **~$8** |
+| 5 a week | 33 | $4.90 | ~$1 | **~$6** |
+| 3 a week | 20 | $2.94 | ~$1 | **~$4** |
+| 2 a week | 13 | $1.96 | ~$1 | **~$3** |
+| 1 a week | 7 | $0.98 | ~$1 | **~$2** |
+
+Three things in that table are worth reading twice.
+
+**`stage` and `prod` are a rounding error.** Under an hour a week of verification costs about a dollar a month, because they are hourly and they are almost never up. That is the environment split paying for itself: the thing that would have tripled the bill is the thing that is never running.
+
+**Almost all of it is hourly, so a quiet month is genuinely cheap.** There is no floor to speak of until `v9-edge`: the registry is free, the state blobs are cents, and everything else dies with the stack. A month with no sessions costs close to nothing, which is the property the whole method depends on.
+
+**Build and destroy is the largest inefficiency, not the largest cost.** At one-hour sessions, a third of `dev`'s billed time is infrastructure that exists but is not being worked on — creating an AKS cluster and a PostgreSQL Flexible Server are each several minutes, and the destroy is not instant either. For `stage` and `prod` it is worse, because the useful window is shorter than the setup:
+
+| A verification of | Plus ~30 min of build and destroy | Overhead |
+| --- | --- | --- |
+| 30 minutes | 60 min billed | 50% |
+| 15 minutes | 45 min billed | 67% |
+| 10 minutes | 40 min billed | 75% |
+
+In dollars that is pennies and not worth optimising. In attention it is the reason a verification step stops happening, which is why the conclusion in [ROADMAP.md](ROADMAP.md) is to make it a pipeline job rather than a thing to sit through. Cold-rebuild time is worth measuring for the same reason: it is the one number here entirely within the repository's control.
+
+| Up | Standing | Minimum |
+| --- | --- | --- |
+| Nothing | $0 | ~$5 |
+| `dev` | ~$110 | ~$5 |
+| `dev` + `stage` | ~$220 | ~$5 |
+| All three | ~$330, and over quota | ~$5 |
 
 ## Where a landing zone hides its cost
 
@@ -139,6 +182,12 @@ The real exposure is neither. It is the `deployIfNotExists` and `modify` policie
 ## One budget, not thirteen
 
 Step 5 of `v0-bootstrap` creates one monthly consumption budget across the subscription, alerting at 50% and 80% of actual cost and 100% of forecast.
+
+**The number is $20 a month**, and it comes from the table above. Expected spend through `v6-scale` runs $2 to $8 depending on how busy the month is. The failure this budget exists to catch is a stack left running, which burns $3.62 a day — so the 50% threshold at $10 sits about $2 above the busiest ordinary month and trips within a day of a stack being forgotten. A $15 budget would alert at $7.50 and fire on normal use; a $30 budget would take two days to notice.
+
+The 100%-of-forecast alert is the one that will actually catch it first, because month-to-date actual is low early in the month regardless. The 50% threshold is the backstop, and it will occasionally fire on an unusually heavy month — which is a true answer to the only question this budget asks.
+
+Raise it at `v9-edge`, which adds ~$35 of Front Door and is the first real permanent charge in the project, and again at `v11-resilient`.
 
 Budget alerts are free, so the argument against per-milestone budgets is alert quality, not cost: thirteen small alerts get ignored as a set. One subscription-wide budget answers the only question worth waking up for — is this month different from the last one? Per-milestone attribution is Cost Analysis's job, and it does it with the tags.
 
@@ -157,7 +206,8 @@ Neither is retroactive. A `modify` policy corrects existing resources only on a 
 ## Standing rules
 
 1. Set the tier and retention on the Log Analytics workspace **when you create it**. The default retention is not the cheapest, and log ingestion is the only cost here that grows without you doing anything.
-2. Tear the stack down when a session ends. From `v2-cluster` onward that habit is the difference between a small bill and a large one.
-3. Check the minimum cost each month. In a week with no work the bill must stay flat. If it does not, look first in the `MC_` node resource group.
-4. When a milestone completes, record the true cost from Cost Analysis and replace the estimate above.
-5. Before adding any resource, ask which of the three kinds it is. If the answer is "remaining", say out loud what it costs each month forever.
+2. Destroy the stack at the end of every session — `terragrunt run-all destroy` in the environment directory, not resource by resource. From `v2-cluster` onward this is the difference between a bill around $10 and one around $110.
+3. Destroy `stage` and `prod` the moment the promotion they were stood up for is proved. They exist to be applied, not to be kept.
+4. Check the minimum cost each month. In a week with no work the bill must stay flat. If it does not, look first in the `MC_` node resource group.
+5. When a milestone completes, record the true cost from Cost Analysis and replace the estimate above.
+6. Before adding any resource, ask which of the three kinds it is. If the answer is "remaining", say out loud what it costs each month forever.

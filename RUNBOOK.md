@@ -1,6 +1,6 @@
 # PulseGate: Runbook
 
-PulseGate is built out of Terraform code and Kubernetes manifests, with a short list of exceptions. An operation ends up on that list for one of three reasons: Azure exposes no API for it, Terraform has no resource for it, or the operation is the one that installs the tool that would otherwise have done the job.
+PulseGate is built out of Terraform modules, Terragrunt configuration and Kubernetes manifests, with a short list of exceptions. An operation ends up on that list for one of three reasons: Azure exposes no API for it, Terraform has no resource for it, or the operation is the one that installs the tool that would otherwise have done the job.
 
 Those exceptions are collected here so they are not rediscovered mid-apply. Each entry states why it exists, when in the roadmap it has to happen, the steps, and a check — the check matters most, because a hand-run operation produces no plan output to read afterward.
 
@@ -10,12 +10,14 @@ Those exceptions are collected here so they are not rediscovered mid-apply. Each
 | --- | --- | --- | --- |
 | 1. Register the resource providers | `v0-bootstrap` | **Yes** | Not done |
 | 2. Confirm the directory and subscription permissions | `v0-bootstrap` | **Yes** | Confirmed |
-| 3. Configure the GitHub repository variables | `v0-bootstrap` | Yes, for step 7 | Not done |
-| 4. Install Argo CD, once, by hand | `v3-gitops` | Yes | Not done |
+| 3. Configure the GitHub environments and variables | `v0-bootstrap` | Yes, for step 7 | Not done |
+| 4. Install Argo CD, on every cluster rebuild | `v3-gitops` | Yes | Not done |
 | 5. Retire the Argo CD initial admin password | `v3-gitops` | No | Not done |
-| 6. Register a domain and delegate the zone | `v9-edge` | Yes | Not done |
+| 6. Make the `ghcr.io` package public | `v4-pipeline` | **Yes** | Not done |
 
-Operations 1 and 2 come before the first `terraform apply`, not after it. Read both before you write any HCL.
+Operations 1 and 2 come before the first apply, not after it. Read both before you write any HCL.
+
+`v9-edge` used to add an operation here — register a domain, delegate the nameservers, wait for propagation. It was removed when the project settled on Front Door's default endpoint hostname instead of a custom domain. No registrar, no DNS zone, no ACME, and nothing in that milestone now has to happen days ahead of the rest of it. The reasoning is in [ROADMAP.md](ROADMAP.md).
 
 ## Where the friction is
 
@@ -37,7 +39,7 @@ Register the namespaces the roadmap reaches. Registering one this project never 
 
 ```bash
 for ns in \
-  Microsoft.ContainerService Microsoft.ContainerRegistry \
+  Microsoft.ContainerService \
   Microsoft.Network Microsoft.Compute Microsoft.Storage \
   Microsoft.KeyVault Microsoft.ServiceBus Microsoft.DBforPostgreSQL \
   Microsoft.OperationalInsights Microsoft.Insights Microsoft.Monitor \
@@ -63,7 +65,7 @@ An empty result means nothing is mid-registration. Then confirm the ones that ma
 
 ```bash
 az provider list \
-  --query "[?namespace=='Microsoft.ContainerService'||namespace=='Microsoft.ContainerRegistry'||namespace=='Microsoft.KeyVault'||namespace=='Microsoft.ServiceBus'||namespace=='Microsoft.DBforPostgreSQL'||namespace=='Microsoft.OperationalInsights'].{n:namespace,s:registrationState}" \
+  --query "[?namespace=='Microsoft.ContainerService'||namespace=='Microsoft.KeyVault'||namespace=='Microsoft.ServiceBus'||namespace=='Microsoft.DBforPostgreSQL'||namespace=='Microsoft.OperationalInsights'].{n:namespace,s:registrationState}" \
   -o table
 ```
 
@@ -106,13 +108,13 @@ az role assignment list --assignee "$(az ad signed-in-user show --query userPrin
 
 **Note.** Being Global Administrator makes the bootstrap easy and is not a state to stay in. The whole purpose of step 4 is that CI never uses this identity. After `v0-bootstrap` is complete, this account is break-glass only, and the pipeline runs as a federated credential with role assignments that grow one milestone at a time.
 
-## Operation 3: Configure the GitHub repository variables
+## Operation 3: Configure the GitHub environments and variables
 
 **Reason.** The `azure/login` action needs three identifiers to request a token: the client ID of the application, the tenant ID, and the subscription ID. None of them is a secret — they are identifiers, and the actual authentication is the federated OIDC token that GitHub mints for the job. Storing them as repository *variables* rather than *secrets* is deliberate and is the point of the exercise: after this milestone there is nothing secret in the repository's settings at all.
 
 **When.** After step 4 of `v0-bootstrap` creates the application, and before step 7 runs the first workflow.
 
-**Steps.** In the repository, under Settings, Secrets and variables, Actions, on the Variables tab, add:
+**Steps.** In the repository, under Settings, Secrets and variables, Actions, on the Variables tab, add the repository-wide values:
 
 | Name | Value |
 | --- | --- |
@@ -120,17 +122,25 @@ az role assignment list --assignee "$(az ad signed-in-user show --query userPrin
 | `AZURE_TENANT_ID` | `<tenant-id>` |
 | `AZURE_SUBSCRIPTION_ID` | `<subscription-id>` |
 
-The apply identity has a second client ID. Whether it lives in a repository variable or a GitHub environment depends on how step 7 gates the apply, and that decision belongs to the milestone.
+The plan identity is repository-wide because a plan is read-only and the same in every environment. The apply identity is not: it has a federated credential per environment, so it needs a GitHub **Environment** per Terragrunt environment.
+
+Under Settings, Environments, create `dev`, `stage` and `prod`. Each holds one variable, `AZURE_APPLY_CLIENT_ID`, with that environment's apply client ID from the Terraform output. Put required reviewers on `prod`, which is the only protection rule this project needs — the environment gate is what makes an apply to `prod` a deliberate act rather than a merge.
+
+None of these is a secret. They are identifiers, and the authentication is the federated OIDC token GitHub mints for the job.
 
 **Check.** Open a pull request that changes a Terraform file. The workflow must reach `terraform plan` and read state from the storage account. If it fails at the login step, the federated credential's subject does not match the workflow's claim — this is almost always the `pull_request` versus `ref` subject distinction, and it is a Terraform-side fix, not a GitHub-side one.
 
 **Note.** The federated credential's subject string is exact. A credential written for `repo:OWNER/pulsegate:ref:refs/heads/main` does not authorize a pull request job, which presents `repo:OWNER/pulsegate:pull_request`. Step 4 creates both, because step 7 needs the second and every later apply needs the first.
 
-## Operation 4: Install Argo CD, once, by hand
+## Operation 4: Install Argo CD, on every cluster rebuild
 
 **Reason.** Argo CD cannot install itself, and this project has declared that Terraform stops at the cluster boundary. The bootstrap has to break one of those two rules exactly once. Breaking it by hand, in the runbook, with a check, is better than breaking it in Terraform, where the exception becomes permanent and the cluster becomes a dependency of the state file.
 
-**When.** At the start of `v3-gitops`, against the cluster that `v2-cluster` built.
+**When.** At the start of `v3-gitops`, and then **every time a cluster is rebuilt** — which, with the stack destroyed at the end of each session, is every session.
+
+That frequency changes what this operation is. A thing done once can be done by hand and written down; a thing done daily has to be a committed script, or it becomes the step that makes you skip the teardown. So the deliverable of `v3-gitops` is not a documented procedure but `scripts/bootstrap-argocd.sh`, idempotent, taking the environment name and reading the same committed values file.
+
+Whether that stays one Argo CD per cluster or becomes a single control plane reconciling all three is an open decision in [ROADMAP.md](ROADMAP.md). The script is the same either way; what changes is how many times it runs.
 
 **Steps.** The mechanics belong to the milestone and are not written out here in advance, because the chart version and the values file do not exist yet. The shape is fixed, and it is the part worth committing to now:
 
@@ -140,7 +150,9 @@ The apply identity has a second client ID. Whether it lives in a repository vari
 
 **Check.** Delete the Argo CD Deployment and confirm that Argo CD restores it. If it does not, step 2 did not take, and Argo CD is a hand-installed component pretending to be a managed one — which is the exact failure this operation exists to avoid.
 
-**Note.** After this operation, `kubectl apply` against this cluster is a diagnostic tool, not a deployment method. Anything applied by hand from here on is drift, and `v3-gitops` configures Argo CD to remove it.
+**Note.** After this operation, `kubectl apply` against that cluster is a diagnostic tool, not a deployment method. Anything applied by hand from here on is drift, and `v3-gitops` configures Argo CD to remove it.
+
+The daily repetition is the check, and a harsh one: if standing an environment up from nothing is painful, the configuration is carrying state it should not. Record how long a cold rebuild takes the first time it works, and treat any growth in that number as a defect.
 
 ## Operation 5: Retire the Argo CD initial admin password
 
@@ -159,29 +171,31 @@ The apply identity has a second client ID. Whether it lives in a repository vari
 
 **Note.** Step 2 needs another Entra application registration, which is why operation 2 matters beyond `v0-bootstrap`.
 
-## Operation 6: Register a domain and delegate the zone
+## Operation 6: Make the `ghcr.io` package public
 
-**Reason.** Terraform creates the Azure DNS zone. It cannot register a domain name at a registrar, and it cannot set the nameserver records at that registrar. That delegation is manual for any domain not bought through Azure.
+**Reason.** A package published to GitHub Container Registry is **private by default** — *"when you first publish a package that is scoped to your personal account, the default visibility is private and only you can see the package."* Visibility is changed in the package's own settings, and there is no API resource in this project's Terraform that governs it.
 
-**When.** Early in `v9-edge`, and earlier than feels necessary. Nameserver delegation propagates on the registrar's schedule, and the ACME HTTP-01 challenge that issues the certificate cannot succeed until it has.
+This matters more than a visibility setting usually would. The whole reason `v2-cluster` needs no `imagePullSecret` is that public packages on the Container registry allow **anonymous pull**. Leave the package private and the kubelet gets an authentication failure on first pull, and the fix looks like a Kubernetes problem while living in GitHub's settings.
+
+**When.** Immediately after the first successful push in `v4-pipeline`, and before the first deploy that pulls it.
 
 **Steps.**
 
-1. Register a domain, at any registrar.
-2. Apply the Terraform that creates the Azure DNS zone.
-3. Read the four nameservers from the zone's output.
-4. Set those four as the domain's nameservers at the registrar.
-5. Wait for propagation.
+1. Push the image once, so the package exists.
+2. Open the package's landing page — under the repository's **Packages**, or on the account's Packages tab.
+3. Select the settings gear, scroll to **Danger Zone**, choose **Change visibility**, and set **Public**.
+4. While there, link the package to the repository if it is not already, so its permissions follow the repo.
 
-**Check.**
+**Check.** Pull the image with no credentials at all, from somewhere logged out:
 
 ```bash
-dig NS <your-domain> +short
+docker logout ghcr.io
+docker pull ghcr.io/<owner>/pulsegate-api@sha256:<digest>
 ```
 
-The four Azure nameservers must be returned. Until they are, do not attempt certificate issuance — a failed ACME challenge counts against Let's Encrypt's rate limit, and the limit is low enough to lose an afternoon to.
+A successful pull means the kubelet will succeed too. A `denied` or `unauthorized` means step 3 did not take.
 
-**Note.** The domain registration is an annual cost that no destroy operation removes, and it is the only cost in this project that Azure does not bill. Record it in [COST.md](COST.md) when it is incurred.
+**Note.** This is a one-time setting per package, not per push, so it does not recur with the daily rebuild. But there is one package per component — `api`, `scheduler`, `checker` — and each needs it the first time it is published.
 
 ## A note on what is deliberately not here
 

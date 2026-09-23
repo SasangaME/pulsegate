@@ -53,6 +53,8 @@ Nothing in that table is there because it would look good in a diagram. Remove t
 
 The method here is to stand the infrastructure up, work on it, and tear it down again — which only works if there is no large fixed monthly floor underneath. A managed Kubernetes service that bills for its control plane by the month puts exactly such a floor in place, and the nightly teardown becomes theatre.
 
+The stack is destroyed at the end of every session and rebuilt from zero at the start of the next one. That is the constraint everything else here answers to: the repository has to be able to recreate the platform without a human remembering anything, because nothing is left running to remember it from. What persists between sessions is this repository, the images in `ghcr.io`, and the state backend — the Azure infrastructure itself does not.
+
 AKS prices the control plane by tier and the bottom tier is free. There is no uptime SLA on that tier, which is the right trade for a cluster with no users that spends most of its life deallocated. `az aks stop` deallocates the node pool VMs and leaves the cluster object behind, so a pause between sessions is one command rather than a rebuild. [COST.md](COST.md) carries the numbers and the difference between stopping and destroying.
 
 Two Azure specifics shape the design and are noted where they land:
@@ -62,7 +64,7 @@ Two Azure specifics shape the design and are noted where they land:
 
 ## Where the application fits
 
-The application shows up in `v2-cluster`, the first milestone that has a registry and a cluster. A registry with no image to store and a scheduler with no pods to run are not worth building. Before that, `v1-network` proves out private subnets and private access against a host that answers `/healthz` and nothing else.
+The application shows up in `v2-cluster`, the first milestone with a cluster to run it on. A scheduler with no pods to run is not worth building. Before that, `v1-network` proves out private subnets and private access against a host that answers `/healthz` and nothing else.
 
 From there the code arrives in whatever order the infrastructure can support.
 
@@ -98,13 +100,23 @@ The container image is the real interface between the application and everything
 
 ```
 bootstrap/    Terraform, applied once. The state backend and nothing else.
-platform/     Terraform. The Azure resources: network, cluster, data, edge.
-gitops/       Kubernetes manifests. The only thing Argo CD reads.
+modules/      Terraform modules: network, cluster, data, edge.
+live/         Terragrunt. One directory per environment, pointing at modules/.
+  _envcommon/   Component config shared by all three environments.
+  dev/  stage/  prod/
+  shared/       What the environments have in common: the identities.
+gitops/       Kubernetes manifests, with a per-environment overlay. Argo CD reads this.
 apps/         Application source and Dockerfiles.
 .github/      Workflows.
 ```
 
-The seam between `platform/` and `gitops/` is deliberate and is defined in `v3-gitops`. Terraform stops at the cluster boundary: it creates the cluster, the registry, the databases, the identities, and the DNS records, and then it stops. Everything that lives *inside* the cluster is a manifest under `gitops/`, reconciled by Argo CD, and Terraform never applies it.
+**Three environments — `dev`, `stage`, `prod` — built from one set of modules by Terragrunt.** `modules/` holds the Terraform and knows nothing about environments; `live/` holds a small `terragrunt.hcl` per component per environment, supplying inputs and declaring dependencies. The difference between the environments is inputs, not code: `dev` runs single-zone on Spot with the cheapest SKUs, `prod` runs zone-redundant with the api off Spot, and `stage` matches prod's shape at prod's smallest size.
+
+Terragrunt is here for three things Terraform alone makes repetitive across environments — a `remote_state` block that derives each state key from the directory path, so the environments cannot collide in the backend; `dependency` blocks so the cluster plans against the network's real outputs; and `run-all` to apply or destroy a whole environment in order.
+
+`dev` is the environment that stays up during a session. `stage` and `prod` are applied to prove the promotion path and destroyed after. That is a cost decision and a quota one — the arithmetic is in [COST.md](COST.md).
+
+The seam between `live/` and `gitops/` is deliberate and is defined in `v3-gitops`. Terraform stops at the cluster boundary: it creates the cluster, the databases and the identities, and then it stops. Everything that lives *inside* the cluster is a manifest under `gitops/`, reconciled by Argo CD, and Terraform never applies it.
 
 The one exception is Argo CD itself, which cannot install itself. That bootstrap problem, and the reasoning behind how it is solved, belongs to `v3-gitops`.
 
@@ -112,9 +124,9 @@ The one exception is Argo CD itself, which cannot install itself. That bootstrap
 
 ## Where the project stands
 
-Nothing is built. `v0-bootstrap` has not started.
+Nothing is built. `v0-bootstrap` is under way and only the `.gitignore` is done.
 
-What exists is the documentation and the `.gitignore`, in that order and on purpose — the ignore file has to be right before the first `terraform apply`, not after it. State files and plan files both carry resource attributes in plaintext, and a secret that reaches a commit is disclosed whether or not the next commit removes it.
+What exists is the documentation and the `.gitignore`, in that order and on purpose — the ignore file has to be right before the first apply, not after it. State files and plan files both carry resource attributes in plaintext, and a secret that reaches a commit is disclosed whether or not the next commit removes it.
 
 `v0-bootstrap` is finished when a pull request can plan against remote state in Azure Blob Storage using a federated credential that exists only for the life of the job, and no identity in the pipeline holds a client secret.
 
