@@ -40,7 +40,7 @@ Terragrunt earns its place on three things that are repetitive in plain Terrafor
 
 - **`remote_state`**, deriving each state key from the directory path, so the three environments cannot collide in one storage container.
 - **`dependency`**, so the cluster plans against the network's real outputs and `mock_outputs` keep a first plan working before anything is applied.
-- **`run-all`**, to apply or destroy a whole environment in dependency order — which is what makes "stand `stage` up, prove the promotion, destroy it" a command rather than an afternoon.
+- **`run --all`**, to apply or destroy a whole environment in dependency order — which is what makes "stand `stage` up, prove the promotion, destroy it" a command rather than an afternoon.
 
 Milestones are built in `dev` first. A milestone is not finished until its Terragrunt config applies cleanly in `stage` and `prod` too, because an environment that only ever ran one configuration has not proved the modules are parameterised.
 
@@ -226,8 +226,8 @@ That is the same policy `v10-harden` wrote as a NetworkPolicy, enforced again so
 | --- | --- | --- |
 | 1 | Repository safety rails: the `.gitignore`, before anything is applied | Done |
 | 2 | The `bootstrap` module. Storage Account and state container, on local state | Done |
-| 3 | The root `terragrunt.hcl`: `remote_state`, provider generation, and the move of the state into the container | **Next** |
-| 4 | The Entra application, federated credentials for GitHub, plan and apply identities | Not started |
+| 3 | The root `root.hcl`: `remote_state`, provider generation, and the move of the state into the container | Done |
+| 4 | The Entra application, federated credentials for GitHub, plan and apply identities | **Next** |
 | 5 | The budget. A consumption budget, an action group, an email receiver | Not started |
 | 6 | The subscription baseline. Tag inheritance policy, resource group layout, diagnostic defaults | Not started |
 | 6a | The `live/` skeleton. `_envcommon/`, the three environment directories, `env.hcl` per environment | Not started |
@@ -259,7 +259,7 @@ Only two environments are ever up at once, and the binding constraint is quota r
 
 The registry, the state backend and the Entra applications are shared, which makes promotion a digest moving between overlays rather than an image copied between registries.
 
-Terragrunt rather than plain Terraform with workspaces: workspaces share one backend key and one set of variables, which is exactly the coupling three genuinely different environments should not have. The three features that pay for the extra tool are `remote_state` key derivation, `dependency` blocks between components, and `run-all`.
+Terragrunt rather than plain Terraform with workspaces: workspaces share one backend key and one set of variables, which is exactly the coupling three genuinely different environments should not have. The three features that pay for the extra tool are `remote_state` key derivation, `dependency` blocks between components, and `run --all`.
 
 ### The state backend: a public endpoint, with identity as the boundary
 

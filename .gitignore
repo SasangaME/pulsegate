@@ -11,6 +11,11 @@ tfplan
 .terraform/
 .terragrunt-cache/
 
+# Terragrunt-generated. Derived from root.hcl on every init, and backend.tf
+# carries the state account name, which does not belong in a public repository.
+backend.tf
+provider.tf
+
 # Real variable values. The example file is committed as a template.
 *.tfvars
 *.tfvars.json

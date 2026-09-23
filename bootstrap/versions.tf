@@ -5,6 +5,11 @@ terraform {
   # state, and its state moves into the container it made in step 3 of
   # v0-bootstrap. `init` runs before `apply`, so a backend declared here
   # would be reached before anything had created it.
+  #
+  # As of step 3 the backend is generated into backend.tf by root.hcl, which
+  # derives the account name rather than storing it. A rebuild from nothing
+  # deletes the generated backend.tf, applies on local state again, and
+  # re-migrates.
 
   required_providers {
     azurerm = {
@@ -18,21 +23,7 @@ terraform {
   }
 }
 
-provider "azurerm" {
-  features {}
-
-  # subscription_id and tenant_id come from ARM_SUBSCRIPTION_ID and
-  # ARM_TENANT_ID. Nothing identifying is written into a tracked file.
-
-  # Operation 1 in RUNBOOK.md registered all 21 namespaces already, so the
-  # provider's own registration pass has nothing left to do. Step 3 needs
-  # this same value for a harder reason: the CI plan identity is Reader and
-  # holds no register/action.
-  resource_provider_registrations = "none"
-
-  # shared_access_key_enabled is false on the account below, so every
-  # data-plane call -- including creating the container -- has to carry an
-  # Entra token. Without this the provider reaches for an account key that
-  # does not exist, and fails with a 403 that reads like a permissions bug.
-  storage_use_azuread = true
-}
+# The provider configuration lives in root.hcl, which generates it into
+# provider.tf on every init. Declaring it here as well is a duplicate
+# provider configuration and a hard error -- and the three arguments it
+# carries apply to every environment, not only to this module.
