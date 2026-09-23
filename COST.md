@@ -37,7 +37,7 @@ That is what makes every other number here matter. With the control plane free, 
 
 | Method | Command | What stops | What still bills |
 | --- | --- | --- | --- |
-| Destroy | `terragrunt run-all destroy` | Everything in that environment | Nothing in that environment |
+| Destroy | `terragrunt run --all destroy` | Everything in that environment | Nothing in that environment |
 | Stop | `az aks stop` | That cluster's node pool VMs deallocate | OS disks, persistent volumes, the load balancer, the public IPs, the NAT Gateway |
 
 Stopping keeps the cluster object, the pool configuration, and anything in the cluster that is not in Git — which is exactly why destroy is the default: the point of `v3-gitops` is that the cluster can be thrown away and rebuilt from the repository. Use stop for a break inside a session, destroy at the end of one.
@@ -206,7 +206,7 @@ Neither is retroactive. A `modify` policy corrects existing resources only on a 
 ## Standing rules
 
 1. Set the tier and retention on the Log Analytics workspace **when you create it**. The default retention is not the cheapest, and log ingestion is the only cost here that grows without you doing anything.
-2. Destroy the stack at the end of every session — `terragrunt run-all destroy` in the environment directory, not resource by resource. From `v2-cluster` onward this is the difference between a bill around $10 and one around $110.
+2. Destroy the stack at the end of every session — `terragrunt run --all destroy` in the environment directory, not resource by resource. From `v2-cluster` onward this is the difference between a bill around $10 and one around $110.
 3. Destroy `stage` and `prod` the moment the promotion they were stood up for is proved. They exist to be applied, not to be kept.
 4. Check the minimum cost each month. In a week with no work the bill must stay flat. If it does not, look first in the `MC_` node resource group.
 5. When a milestone completes, record the true cost from Cost Analysis and replace the estimate above.
