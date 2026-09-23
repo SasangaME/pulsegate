@@ -94,7 +94,7 @@ AKS on the Free tier, API server reachable, nodes private.
 - **Entra Workload Identity** with the OIDC issuer on. Nothing uses it yet; enabling it later is a cluster update you would rather not schedule.
 - **Managed NGINX ingress**, through the application routing add-on.
 
-The application is written here and applied by hand with `kubectl` exactly once, so the next milestone has something to take away.
+The application is written at this milestone, in its own repository, built locally and applied by hand with `kubectl` exactly once — so the next milestone has something to take away.
 
 ### `v3-gitops` — Argo CD and the boundary
 
@@ -106,13 +106,15 @@ Then app-of-apps — one root Application over a directory of child Applications
 
 ### `v4-pipeline` — the build
 
-A GitHub Actions workflow that builds the image, scans it with Trivy, pushes to `ghcr.io` and writes the new image **digest** into `gitops/`. Digest, not tag: a tag is a mutable pointer, and a GitOps repository that references one is not declarative. Checkov or `tfsec` scans the Terraform, and the build emits an SBOM.
+Two workflows in two repositories. In the application repository: build the image, scan it with Trivy, emit an SBOM, push to `ghcr.io`. In this one: write the new image **digest** into the `dev` workload overlay, and scan the Terraform with Checkov or `tfsec`. Digest, not tag: a tag is a mutable pointer, and a GitOps repository that references one is not declarative.
 
-Two identities are in play and neither is a stored secret. Terraform authenticates to Azure with the federated credential from `v0-bootstrap`; the registry push authenticates with the `GITHUB_TOKEN` already in the job, given `packages: write`. There is no registry credential to create, store or rotate.
+Two identities are in play in the build and neither is a stored secret. Terraform authenticates to Azure with the federated credential from `v0-bootstrap`; the registry push authenticates with the `GITHUB_TOKEN` already in the job, given `packages: write`. There is no registry credential to create, store or rotate.
 
 The digest is written into the `dev` overlay only. Promotion to `stage` and then `prod` is a pull request moving that digest between overlays — the image is never rebuilt, which is the whole point of a shared registry and of pinning by digest.
 
-A path filter stops the commit to `gitops/` retriggering the build. This is where the single-repository decision gets tested — if the loop outgrows the filter, this is where `gitops/` becomes a second repository.
+The retrigger loop that a single repository would have needed a path filter for does not exist here. The build runs in the application repository and the digest lands in this one, so the commit cannot retrigger the build that produced it. The repository split removes the problem rather than mitigating it.
+
+What it adds is a cross-repository write, and that is where a third identity appears. `GITHUB_TOKEN` is scoped to the repository running the job, so the application repository cannot commit here without a fine-grained token or a GitHub App key — which would be the first stored credential in the project. The alternative inverts the direction: a workflow in this repository polls the registry for a newer digest and opens the pull request with its own `GITHUB_TOKEN`, storing nothing and paying the poll interval in latency instead. It is an open decision below, and it is the one thing the repository split made harder rather than easier.
 
 ### `v5-state` — data and the split
 
@@ -309,6 +311,19 @@ Two consequences to handle rather than discover:
 
 Destroying an ACR nightly was considered and refused: it saves at most $4.70 and breaks digest pinning, promotion and rollback, which makes it strictly worse than this.
 
+### Two repositories: the platform here, the application elsewhere
+
+The application source lives in its own repository. This one holds the platform — `bootstrap/`, `modules/`, `live/`, `charts/`, `gitops/`, `scripts/`, `.github/` — and no Python.
+
+This was decided the other way first, on the grounds that one repository told a more coherent story and that the retrigger loop was cheap to break with a path filter. What changed it is the shape of `gitops/`: `platform/` — ingress, KEDA, the collector, Argo Rollouts — is most of that tree and has nothing to do with the application. Keeping it in the application's repository would have coupled the platform's release cadence to the workload's, which is the wrong way round for a repository whose subject is the platform.
+
+The seam is therefore `apps/` leaving, not `gitops/`. Deployment configuration stays with the platform that reconciles it, which is also the canonical Argo CD layout.
+
+Two consequences, one of each sign:
+
+- **The retrigger loop disappears.** A commit here cannot retrigger a build that runs in another repository, so `v4-pipeline` needs no path filter and the single-repository question is closed.
+- **The digest write becomes cross-repository**, and `GITHUB_TOKEN` does not cross repositories. Push needs a stored credential; pull needs a poll. That is the first point in this project where a stored secret is a candidate at all, and it is recorded as an open decision rather than settled here.
+
 ## Open decisions
 
 Recorded here because deciding them silently later is how a project acquires configuration it cannot explain.
@@ -318,7 +333,7 @@ Recorded here because deciding them silently later is how a project acquires con
 | Python framework | `v2-cluster` | Must be async. See the constraints in [README.md](README.md) |
 | Helm charts or plain manifests under `gitops/` | `v3-gitops` | Kustomize is the third option and the one that argues best with a digest-writing pipeline |
 | NGINX canary annotations or the Istio add-on | `v8-progressive` | Traffic splitting for Argo Rollouts |
-| Whether `gitops/` becomes a second repository | `v4-pipeline` | Decided by whether the path filter holds |
+| How the image digest crosses repositories | `v4-pipeline` | Push with a stored token, or poll the registry from this repository with none. Push would be the project's first stored credential |
 | Azure Firewall Basic or Standard | `v12-govern` | Basic is roughly a third of the hourly rate and has no DNS proxy, which FQDN-based egress rules need |
 | Whether the tag policy moves to management group scope | `v12-govern` | It belongs there; the question is whether re-pointing it is worth a re-remediation |
 | One Argo CD per cluster, or one reconciling all three | `v3-gitops` | Per-cluster is simpler and matches the destroy-and-rebuild method; a single control plane is more realistic and makes `dev` a dependency of `prod` |

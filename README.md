@@ -100,13 +100,20 @@ The container image is the real interface between the application and everything
 
 ```
 bootstrap/    Terraform, applied once. The state backend and nothing else.
-modules/      Terraform modules: network, cluster, data, edge.
+modules/      Terraform modules: network, cluster, data, observability, edge.
 live/         Terragrunt. One directory per environment, pointing at modules/.
   _envcommon/   Component config shared by all three environments.
   dev/  stage/  prod/
   shared/       What the environments have in common: the identities.
-gitops/       Kubernetes manifests, with a per-environment overlay. Argo CD reads this.
-apps/         Application source and Dockerfiles.
+charts/       Helm charts, if the v3-gitops decision goes that way.
+gitops/       What Argo CD reads. Each subtree carries the three environments.
+  bootstrap/    The root app-of-apps Application, one per cluster.
+    dev/  stage/  prod/
+  platform/     In-cluster platform: ingress, KEDA, OpenTelemetry, Rollouts.
+    base/  dev/  stage/  prod/
+  workloads/    api, scheduler and checker, with the pinned image digests.
+    base/  dev/  stage/  prod/
+scripts/      What the daily rebuild needs, starting with the Argo CD bootstrap.
 .github/      Workflows.
 ```
 
@@ -120,13 +127,17 @@ The seam between `live/` and `gitops/` is deliberate and is defined in `v3-gitop
 
 The one exception is Argo CD itself, which cannot install itself. That bootstrap problem, and the reasoning behind how it is solved, belongs to `v3-gitops`.
 
-`gitops/` sits in this repository rather than a second one. The canonical Argo CD guidance is to split application source from deployment configuration, and its reason is real: CI writing an image tag back into the same repository can retrigger CI. The single repository is chosen anyway, because the loop is cheap to break with a path filter and the split costs the project a coherent narrative. If the retrigger problem turns out worse than expected, `v4-pipeline` is where it will show, and splitting is a cheap change at that point.
+**The application source is not in this repository.** It lives in its own, and what this one holds is the platform: the infrastructure, the deployment configuration Argo CD reconciles, the charts and the workflows. That is the canonical Argo CD split — application source on one side, deployment configuration on the other — and the reason behind it is real: CI writing an image digest back into the repository that triggered CI is a loop.
+
+The seam falls on `apps/` leaving rather than `gitops/`, which is the better of the two cuts. Deployment configuration belongs with the platform that reconciles it, not with the application that happens to be deployed by it — `gitops/platform/` is most of that tree and has nothing to do with the application at all.
+
+What the split costs is that the digest write becomes cross-repository, and `GITHUB_TOKEN` is scoped to the repository running the job. Whether the application repository pushes the digest here with a stored credential, or a workflow here pulls it from the registry with none, is an open decision in [ROADMAP.md](ROADMAP.md), due at `v4-pipeline`. It is the first point in this project where a stored secret is a candidate at all, which is why it is being decided rather than defaulted.
 
 ## Where the project stands
 
-Nothing is built. `v0-bootstrap` is under way and only the `.gitignore` is done.
+Nothing is applied. `v0-bootstrap` is under way: the documentation, the `.gitignore`, the directory skeleton and the `bootstrap/` Terraform are written, and no Azure resource exists yet.
 
-What exists is the documentation and the `.gitignore`, in that order and on purpose — the ignore file has to be right before the first apply, not after it. State files and plan files both carry resource attributes in plaintext, and a secret that reaches a commit is disclosed whether or not the next commit removes it.
+The documentation and the `.gitignore` came first, in that order and on purpose — the ignore file has to be right before the first apply, not after it. State files and plan files both carry resource attributes in plaintext, and a secret that reaches a commit is disclosed whether or not the next commit removes it.
 
 `v0-bootstrap` is finished when a pull request can plan against remote state in Azure Blob Storage using a federated credential that exists only for the life of the job, and no identity in the pipeline holds a client secret.
 
