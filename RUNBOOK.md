@@ -8,7 +8,7 @@ Those exceptions are collected here so they are not rediscovered mid-apply. Each
 
 | Operation | Milestone | Blocking? | Status |
 | --- | --- | --- | --- |
-| 1. Register the resource providers | `v0-bootstrap` | **Yes** | Not done |
+| 1. Register the resource providers | `v0-bootstrap` | **Yes** | Done |
 | 2. Confirm the directory and subscription permissions | `v0-bootstrap` | **Yes** | Confirmed |
 | 3. Configure the GitHub environments and variables | `v0-bootstrap` | Yes, for step 7 | Not done |
 | 4. Install Argo CD, on every cluster rebuild | `v3-gitops` | Yes | Not done |
@@ -31,7 +31,11 @@ The friction is at the front instead. A subscription will not create a resource 
 
 **When.** Before step 2 of `v0-bootstrap`. Registration is asynchronous and takes a few minutes for each namespace, so start it and do something else.
 
-**Verified state.** On subscription `<subscription-id>`, checked at the time this file was written, every namespace this project needs is `NotRegistered`. This is normal for a new subscription and it is not an error.
+**Verified state.** Run on the project subscription on 2026-09-23. All 21 namespaces are `Registered`; both checks below return clean.
+
+Eight of them already were, and nobody registered them — `Network`, `Compute`, `Storage`, `Authorization`, `Consumption`, `CostManagement`, `PolicyInsights` and `Security` arrive with a new subscription, as part of the 24 Azure registers by default. The earlier claim here that every namespace was `NotRegistered` was wrong about those eight. The other thirteen were submitted together and the whole set converged in **45 seconds**, which is faster than the few minutes per namespace this operation warns about — fast enough that it is worth polling rather than walking away, but not fast enough to put in the path of an apply.
+
+That distinction is the reason this stays a runbook operation and not Terraform, which is worth stating because `azurerm_resource_provider_registration` exists and the file's own admission test — *anything expressible as code belongs in the modules* — would otherwise put it there. Two things argue against: destroying that resource **unregisters** the namespace, which hands a per-environment teardown the ability to revoke a subscription-wide flag that `dev`, `stage` and `prod` all depend on; and registration is subscription-scoped shared state, so it belongs to the same persistent tier as the state backend and the Entra applications rather than to anything Terragrunt runs per environment.
 
 **Steps.**
 
@@ -90,10 +94,10 @@ az provider list \
 
 | Check | Result |
 | --- | --- |
-| Signed-in user | `<admin-upn>` |
+| Signed-in user | The break-glass admin account for the project tenant |
 | Directory role | `Global Administrator` |
-| Subscription role | `Owner` on `/subscriptions/<subscription-id>` |
-| Tenant | `<tenant-id>` |
+| Subscription role | `Owner` on the project subscription |
+| Tenant | The project tenant |
 
 Both conditions are met. No action is required, and this operation is recorded as confirmed rather than done.
 
@@ -119,8 +123,8 @@ az role assignment list --assignee "$(az ad signed-in-user show --query userPrin
 | Name | Value |
 | --- | --- |
 | `AZURE_CLIENT_ID` | The client ID of the plan application, from the Terraform output |
-| `AZURE_TENANT_ID` | `<tenant-id>` |
-| `AZURE_SUBSCRIPTION_ID` | `<subscription-id>` |
+| `AZURE_TENANT_ID` | `az account show --query tenantId -o tsv` |
+| `AZURE_SUBSCRIPTION_ID` | `az account show --query id -o tsv` |
 
 The plan identity is repository-wide because a plan is read-only and the same in every environment. The apply identity is not: it has a federated credential per environment, so it needs a GitHub **Environment** per Terragrunt environment.
 

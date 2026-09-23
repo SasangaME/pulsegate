@@ -95,7 +95,7 @@ The test for anything added later: prefer the resource whose cost stops when the
 
 A new pay-as-you-go subscription ships with vCPU quotas low enough to constrain this roadmap before the budget does. Quota is checked at allocation time, so it fails the apply and not the plan — the same trap as an unregistered provider.
 
-Read on subscription `<subscription-id>`, identical across every region considered:
+Read on the project subscription, identical across every region considered:
 
 | Quota | Limit | Constrains |
 | --- | --- | --- |
