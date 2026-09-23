@@ -68,7 +68,7 @@ The application is a stub until `v5-state` — no database to persist a monitor 
 
 ### `v0-bootstrap` — the subscription foundation
 
-- **Storage Account and one state container** — versioned, encrypted, public network access closed, shared key access disabled so every read goes through Entra ID. Locking is the blob lease, which the `azurerm` backend takes natively; there is no lock table on Azure. All three environments share the container and are separated by state key, which Terragrunt derives from the directory path rather than anyone typing it.
+- **Storage Account and one state container** — versioned, encrypted, shared key access disabled so every read goes through Entra ID, and the public endpoint left reachable because closing it locks CI out of state. The decision is below. Locking is the blob lease, which the `azurerm` backend takes natively; there is no lock table on Azure. All three environments share the container and are separated by state key, which Terragrunt derives from the directory path rather than anyone typing it.
 - **An Entra application** with federated credentials for GitHub. Two identities: a **plan** identity with `Reader` plus state access, and an **apply** identity whose role assignments grow each milestone. The apply identity gets a federated credential per environment, so a job targeting `prod` presents a different subject than one targeting `dev`.
 - **A consumption budget**, action group and email receiver.
 - **An Azure Policy assignment** inheriting tags from the resource group, because Azure tags do not propagate on their own.
@@ -258,6 +258,22 @@ Only two environments are ever up at once, and the binding constraint is quota r
 The registry, the state backend and the Entra applications are shared, which makes promotion a digest moving between overlays rather than an image copied between registries.
 
 Terragrunt rather than plain Terraform with workspaces: workspaces share one backend key and one set of variables, which is exactly the coupling three genuinely different environments should not have. The three features that pay for the extra tool are `remote_state` key derivation, `dependency` blocks between components, and `run-all`.
+
+### The state backend: a public endpoint, with identity as the boundary
+
+The state account keeps its public endpoint. Shared key access is disabled, anonymous blob access is off, TLS 1.2 is the floor, and every read — CI's and mine — carries an Entra token and a data-plane role assignment. The boundary around the most sensitive blobs in the project is identity rather than network, and that is a decision, not an oversight.
+
+Closing the endpoint was the first instinct, and this file said so until it was worked through. There are two ways to close it and neither survives `v0-bootstrap`.
+
+A **private endpoint** needs a VNet, and there is none until `v1-network`. The state backend is built before the network that would host the endpoint, and inverting that order leaves the network's own state with nowhere to live.
+
+A **firewall with IP rules** works for a laptop and fails for CI. GitHub-hosted runners have no stable egress address — the published range is thousands of prefixes against a storage account that accepts a few hundred IP rules — and `bypass = ["AzureServices"]` does not cover them, because a GitHub runner is not an Azure service. A firewalled state account therefore makes this milestone's own completion test, a pull request planning against remote state with a federated credential, impossible to pass.
+
+What the identity boundary gives up is less than it first sounds. With shared keys disabled there is no account key to steal, leak or rotate, and no SAS URL to find in a log. The account name is not a credential and is not treated as one, so knowing it buys nothing. What remains is the blast radius of a compromised Entra principal, which a network rule would not have reduced either: CI has to reach this account from the internet for the pipeline to exist at all.
+
+Refused, and worth naming: a **self-hosted runner** inside the VNet would allow a private endpoint and a default-deny rule. It also adds a permanently running VM, which is exactly the standing monthly floor [COST.md](COST.md) exists to prevent, bought in exchange for closing a hole that identity already closes.
+
+Worth revisiting only if a self-hosted runner arrives for some other reason. Nothing in the roadmap needs one.
 
 ### Hostname: Front Door's default endpoint, no custom domain
 
