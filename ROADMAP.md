@@ -225,8 +225,8 @@ That is the same policy `v10-harden` wrote as a NetworkPolicy, enforced again so
 | Step | Work | Status |
 | --- | --- | --- |
 | 1 | Repository safety rails: the `.gitignore`, before anything is applied | Done |
-| 2 | The `bootstrap` module. Storage Account and state container, on local state | Not started |
-| 3 | The root `terragrunt.hcl`: `remote_state`, provider generation, and the move of the state into the container | Not started |
+| 2 | The `bootstrap` module. Storage Account and state container, on local state | Done |
+| 3 | The root `terragrunt.hcl`: `remote_state`, provider generation, and the move of the state into the container | **Next** |
 | 4 | The Entra application, federated credentials for GitHub, plan and apply identities | Not started |
 | 5 | The budget. A consumption budget, an action group, an email receiver | Not started |
 | 6 | The subscription baseline. Tag inheritance policy, resource group layout, diagnostic defaults | Not started |

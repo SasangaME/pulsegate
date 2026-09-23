@@ -135,7 +135,9 @@ What the split costs is that the digest write becomes cross-repository, and `GIT
 
 ## Where the project stands
 
-Nothing is applied. `v0-bootstrap` is under way: the documentation, the `.gitignore`, the directory skeleton and the `bootstrap/` Terraform are written, and no Azure resource exists yet.
+`v0-bootstrap` is under way, and the first resources are applied. The state backend exists: a resource group, a zone-redundant StorageV2 account with shared key access disabled, and one private container holding blob versioning and thirty-day retention on both blobs and containers. Nothing else in the subscription has been created yet.
+
+That module still keeps its state on disk, because the backend it would otherwise use is the thing it just made. Moving it into the container it created is the next step, along with the root `terragrunt.hcl` that every later environment inherits.
 
 The documentation and the `.gitignore` came first, in that order and on purpose — the ignore file has to be right before the first apply, not after it. State files and plan files both carry resource attributes in plaintext, and a secret that reaches a commit is disclosed whether or not the next commit removes it.
 
