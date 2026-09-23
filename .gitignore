@@ -50,3 +50,4 @@ venv/
 
 # Local working notes — personal scratch, not part of the deliverable.
 *.local.md
+instructions.md
