@@ -135,13 +135,15 @@ What the split costs is that the digest write becomes cross-repository, and `GIT
 
 ## Where the project stands
 
-`v0-bootstrap` is under way, and the first resources are applied. The state backend exists: a resource group, a zone-redundant StorageV2 account with shared key access disabled, and one private container holding blob versioning and thirty-day retention on both blobs and containers. Nothing else in the subscription has been created yet.
+`v0-bootstrap` is under way, and the first resources are applied. The state backend exists: a resource group, a zone-redundant StorageV2 account with shared key access disabled, and one private container holding blob versioning and thirty-day retention on both blobs and containers.
 
 That module no longer keeps its state on disk. The root `root.hcl` that every later environment inherits is in place, and `bootstrap/` was the first unit to adopt it: its state now lives in the container it created, under the key `bootstrap/terraform.tfstate`.
 
 The backend config stores none of the three values it needs. Terragrunt rebuilds the account name from the subscription ID in the environment, using the same truncated hash the module itself derives it from, so the two agree by construction and a globally unique name never reaches a tracked file. The resource group and the container are plain strings built from the project name.
 
-Next is the Entra application and the federated credentials that let a pull request plan without a client secret.
+The CI identities exist too, in their own unit under `live/shared/identity/` — the first one applied from `live/`. One plan identity holds `Reader` and state access, federated to pull requests and `main`. Three apply identities, one per environment, are each federated only to their own GitHub Environment, so `prod`'s required reviewer gates every apply to it. None of them holds a client secret. Their client IDs are repository and environment variables in GitHub, not secrets, because they are identifiers and not credentials.
+
+Next is the budget: a consumption budget, an action group and an email receiver.
 
 The documentation and the `.gitignore` came first, in that order and on purpose — the ignore file has to be right before the first apply, not after it. State files and plan files both carry resource attributes in plaintext, and a secret that reaches a commit is disclosed whether or not the next commit removes it.
 

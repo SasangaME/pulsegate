@@ -10,7 +10,7 @@ Those exceptions are collected here so they are not rediscovered mid-apply. Each
 | --- | --- | --- | --- |
 | 1. Register the resource providers | `v0-bootstrap` | **Yes** | Done |
 | 2. Confirm the directory and subscription permissions | `v0-bootstrap` | **Yes** | Confirmed |
-| 3. Configure the GitHub environments and variables | `v0-bootstrap` | Yes, for step 7 | Not done |
+| 3. Configure the GitHub environments and variables | `v0-bootstrap` | Yes, for step 7 | Done |
 | 4. Install Argo CD, on every cluster rebuild | `v3-gitops` | Yes | Not done |
 | 5. Retire the Argo CD initial admin password | `v3-gitops` | No | Not done |
 | 6. Make the `ghcr.io` package public | `v4-pipeline` | **Yes** | Not done |
