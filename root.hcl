@@ -13,6 +13,11 @@ locals {
   # which is what keeps the account name out of this public repository.
   suffix               = substr(sha256(get_env("ARM_SUBSCRIPTION_ID")), 0, 6)
   storage_account_name = "st${local.project}state${local.suffix}"
+
+  # Plain strings, kept here so a unit that needs to grant access to the state
+  # (live/shared/identity) reads them rather than repeating them.
+  state_resource_group_name = "rg-${local.project}-tfstate"
+  state_container_name      = "tfstate"
 }
 
 remote_state {
@@ -24,9 +29,9 @@ remote_state {
   }
 
   config = {
-    resource_group_name  = "rg-${local.project}-tfstate"
+    resource_group_name  = local.state_resource_group_name
     storage_account_name = local.storage_account_name
-    container_name       = "tfstate"
+    container_name       = local.state_container_name
 
     # One container, one key per unit, derived from the directory path:
     # bootstrap/terraform.tfstate, live/dev/network/terraform.tfstate, and so

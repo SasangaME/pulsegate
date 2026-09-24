@@ -134,7 +134,7 @@ None of these is a secret. They are identifiers, and the authentication is the f
 
 **Check.** Open a pull request that changes a Terraform file. The workflow must reach `terraform plan` and read state from the storage account. If it fails at the login step, the federated credential's subject does not match the workflow's claim — this is almost always the `pull_request` versus `ref` subject distinction, and it is a Terraform-side fix, not a GitHub-side one.
 
-**Note.** The federated credential's subject string is exact. A credential written for `repo:OWNER/pulsegate:ref:refs/heads/main` does not authorize a pull request job, which presents `repo:OWNER/pulsegate:pull_request`. Step 4 creates both, because step 7 needs the second and every later apply needs the first.
+**Note.** The federated credential's subject string is exact. A credential written for `repo:OWNER/pulsegate:ref:refs/heads/main` does not authorize a pull request job, which presents `repo:OWNER/pulsegate:pull_request`. And a job that declares an `environment:` presents `repo:OWNER/pulsegate:environment:<name>` instead of either, whatever its branch. Step 4 therefore gives the plan identity the `pull_request` and `main` subjects, and each apply identity only its own environment's subject — which is what makes the GitHub Environment, and its reviewers on `prod`, the gate on every apply.
 
 ## Operation 4: Install Argo CD, on every cluster rebuild
 

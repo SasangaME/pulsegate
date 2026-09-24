@@ -60,7 +60,7 @@ Milestones are built in `dev` first. A milestone is not finished until its Terra
 | `v9-edge` | Public access at the edge | Front Door, WAF, the default endpoint hostname, private origin |
 | `v10-harden` | Policy and least privilege | NetworkPolicy, Pod Security Admission, Azure Policy for AKS, Defender, private cluster, image signing |
 | `v11-resilient` | Disaster recovery and review | Availability zones, Azure Backup for AKS, a second region, Well-Architected review |
-| `v12-govern` | The landing zone around the workload | Management group hierarchy, ALZ initiatives at MG scope, hub VNet, Azure Firewall egress |
+| `v12-govern` | The landing zone around the workload | Management group hierarchy, ALZ initiatives at MG scope, identity vending with managed identities, hub VNet, Azure Firewall egress |
 
 The application is a stub until `v5-state` — no database to persist a monitor to, no queue for the scheduler and checker to talk through. The table of what it does per milestone is in [README.md](README.md).
 
@@ -200,7 +200,9 @@ The ALZ initiatives are assigned with `enforcementMode` set to `DoNotEnforce` fi
 
 That is the same policy `v10-harden` wrote as a NetworkPolicy, enforced again somewhere the cluster does not control. A pod that escapes the CNI's policy engine still has to get past the firewall, and for a product whose defining risk is fetching URLs strangers chose, two independent enforcement points are worth having. Comparing them is the exercise.
 
-**Not built.** Subscription vending needs an MCA or EA billing account, which a personal pay-as-you-go subscription does not have, so that half is read rather than run and only the placement side gets practised. DDoS Network Protection stays off — billed monthly per tenant with no proration worth the name, it is the one part of a landing zone that cannot be practised cheaply.
+**The identity half moves out of the workload.** In a landing zone the workload repository does not create its own CI identities; the platform layer hands them over with the subscription. The Entra applications from `v0-bootstrap` are replaced by **user-assigned managed identities** with GitHub federated credentials, created by the platform layer's vending code and not by anything under `live/`. The same shape as before survives — one plan identity, one apply identity per environment, the same federated subjects — but the identities become Azure resources, created with subscription `Owner` rather than directory rights, and no app registration is left for the pipeline. The workload side shrinks to what it should have been all along: it receives client IDs. `live/shared/identity/` is destroyed, the GitHub variables from [RUNBOOK.md](RUNBOOK.md) operation 3 are repointed, and the cutover is proved the same way `v0-bootstrap` was — a pull request plans against remote state with the new identity and nothing else.
+
+**Not built.** Creating a subscription through vending needs an MCA or EA billing account, which a personal pay-as-you-go subscription does not have, so that step is read rather than run. The vending module is pointed at the existing subscription instead, which still exercises everything that happens after a subscription exists: placement in the hierarchy, identities, federated credentials and role assignments. DDoS Network Protection stays off — billed monthly per tenant with no proration worth the name, it is the one part of a landing zone that cannot be practised cheaply.
 
 ## Status
 
@@ -324,6 +326,16 @@ Two consequences, one of each sign:
 - **The retrigger loop disappears.** A commit here cannot retrigger a build that runs in another repository, so `v4-pipeline` needs no path filter and the single-repository question is closed.
 - **The digest write becomes cross-repository**, and `GITHUB_TOKEN` does not cross repositories. Push needs a stored credential; pull needs a poll. That is the first point in this project where a stored secret is a candidate at all, and it is recorded as an open decision rather than settled here.
 
+### CI identities: `live/shared/identity/`, not `bootstrap/`
+
+The Entra applications, their federated credentials and their role assignments live in their own Terragrunt unit under `live/shared/`, next to the environments rather than inside the module that creates the state backend.
+
+They belong with the backend in lifetime — subscription-wide, shared by `dev`, `stage` and `prod`, and never destroyed at the end of a session — but not in anything else. `bootstrap/` is the one unit that has to exist before remote state does, and it stays that size: the backend that stores its own state. Anything that can be applied through `root.hcl` should be, and the identities can.
+
+It is also the first unit applied from `live/`, which makes it the first real test of `root.hcl` somewhere other than the directory it was written against.
+
+The unit is applied by a human, not by CI. The identity that creates the pipeline's identities needs directory permissions the pipeline should never hold, so the pipeline never plans or applies it. This is the pre-landing-zone shape, and it is temporary. `v12-govern` replaces it with the industry-standard one: the platform layer vends user-assigned managed identities to the workload, and this unit is destroyed.
+
 ## Open decisions
 
 Recorded here because deciding them silently later is how a project acquires configuration it cannot explain.
@@ -335,6 +347,7 @@ Recorded here because deciding them silently later is how a project acquires con
 | NGINX canary annotations or the Istio add-on | `v8-progressive` | Traffic splitting for Argo Rollouts |
 | How the image digest crosses repositories | `v4-pipeline` | Push with a stored token, or poll the registry from this repository with none. Push would be the project's first stored credential |
 | Azure Firewall Basic or Standard | `v12-govern` | Basic is roughly a third of the hourly rate and has no DNS proxy, which FQDN-based egress rules need |
+| Where the platform layer's vending code lives | `v12-govern` | A separate platform repository is the enterprise shape; a top-level directory here keeps the project in one place. Either way, nothing under `live/` applies it |
 | Whether the tag policy moves to management group scope | `v12-govern` | It belongs there; the question is whether re-pointing it is worth a re-remediation |
 | One Argo CD per cluster, or one reconciling all three | `v3-gitops` | Per-cluster is simpler and matches the destroy-and-rebuild method; a single control plane is more realistic and makes `dev` a dependency of `prod` |
 | Whether `stage` and `prod` get their own edge | `v9-edge` | Cheaper now that no DNS zone is involved: a second endpoint on one profile, rather than a second profile |

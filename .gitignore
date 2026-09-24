@@ -15,6 +15,7 @@ tfplan
 # carries the state account name, which does not belong in a public repository.
 backend.tf
 provider.tf
+provider_azuread.tf
 
 # Real variable values. The example file is committed as a template.
 *.tfvars
