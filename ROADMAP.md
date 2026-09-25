@@ -232,7 +232,7 @@ That is the same policy `v10-harden` wrote as a NetworkPolicy, enforced again so
 | 4 | The Entra application, federated credentials for GitHub, plan and apply identities | Done |
 | 5 | The budget. A consumption budget, an action group, an email receiver | Done |
 | 6 | The subscription baseline. Tag inheritance policy, resource group layout, diagnostic defaults | **Next** |
-| 6a | The `live/` skeleton. `_envcommon/`, the three environment directories, `env.hcl` per environment | Not started |
+| 6a | The `live/` skeleton. `_envcommon/`, the three environment directories, `env.hcl` per environment | Done |
 | 7 | The first workflow. `fmt`, `validate` and `plan` on each pull request | Not started |
 
 Steps 1 to 3 produce a state backend that stores its own state. Steps 4 and 7 are one test in two halves: step 4 creates the identities, step 7 proves they work. Step 6a builds no Azure resources — it is the directory shape the rest of the project applies through, and it is worth having before `v1-network` has something to put in it.

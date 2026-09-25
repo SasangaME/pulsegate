@@ -145,6 +145,8 @@ The CI identities exist too, in their own unit under `live/shared/identity/` —
 
 The budget is in place, in `live/shared/budget/`: one $20 monthly budget across the whole subscription, alerting at 100% of forecast and 50% and 80% of actual, through an action group that emails and does nothing else. The alert address is read from the environment and never reaches a tracked file. The reasoning behind the number is in [COST.md](COST.md).
 
+The `live/` skeleton is in place ahead of it. Each of `dev`, `stage` and `prod` has an `env.hcl` that names the environment and nothing else yet, and `live/_envcommon/` documents the pattern the first per-environment component will follow: one file per component holding what every environment shares, included by a thin unit that adds only what differs. It builds no Azure resources.
+
 Next is the subscription baseline: the tag inheritance policy, the resource group layout and diagnostic defaults.
 
 The documentation and the `.gitignore` came first, in that order and on purpose — the ignore file has to be right before the first apply, not after it. State files and plan files both carry resource attributes in plaintext, and a secret that reaches a commit is disclosed whether or not the next commit removes it.
