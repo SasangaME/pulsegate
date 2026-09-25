@@ -230,8 +230,8 @@ That is the same policy `v10-harden` wrote as a NetworkPolicy, enforced again so
 | 2 | The `bootstrap` module. Storage Account and state container, on local state | Done |
 | 3 | The root `root.hcl`: `remote_state`, provider generation, and the move of the state into the container | Done |
 | 4 | The Entra application, federated credentials for GitHub, plan and apply identities | Done |
-| 5 | The budget. A consumption budget, an action group, an email receiver | **Next** |
-| 6 | The subscription baseline. Tag inheritance policy, resource group layout, diagnostic defaults | Not started |
+| 5 | The budget. A consumption budget, an action group, an email receiver | Done |
+| 6 | The subscription baseline. Tag inheritance policy, resource group layout, diagnostic defaults | **Next** |
 | 6a | The `live/` skeleton. `_envcommon/`, the three environment directories, `env.hcl` per environment | Not started |
 | 7 | The first workflow. `fmt`, `validate` and `plan` on each pull request | Not started |
 
