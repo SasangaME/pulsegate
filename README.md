@@ -143,7 +143,9 @@ The backend config stores none of the three values it needs. Terragrunt rebuilds
 
 The CI identities exist too, in their own unit under `live/shared/identity/` — the first one applied from `live/`. One plan identity holds `Reader` and state access, federated to pull requests and `main`. Three apply identities, one per environment, are each federated only to their own GitHub Environment, so `prod`'s required reviewer gates every apply to it. None of them holds a client secret. Their client IDs are repository and environment variables in GitHub, not secrets, because they are identifiers and not credentials.
 
-Next is the budget: a consumption budget, an action group and an email receiver.
+The budget is in place, in `live/shared/budget/`: one $20 monthly budget across the whole subscription, alerting at 100% of forecast and 50% and 80% of actual, through an action group that emails and does nothing else. The alert address is read from the environment and never reaches a tracked file. The reasoning behind the number is in [COST.md](COST.md).
+
+Next is the subscription baseline: the tag inheritance policy, the resource group layout and diagnostic defaults.
 
 The documentation and the `.gitignore` came first, in that order and on purpose — the ignore file has to be right before the first apply, not after it. State files and plan files both carry resource attributes in plaintext, and a secret that reaches a commit is disclosed whether or not the next commit removes it.
 
