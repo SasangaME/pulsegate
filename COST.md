@@ -120,7 +120,7 @@ Quota increases are free and usually granted in a day or two. File the request w
 
 | Milestone | Biggest line item | Standing | Minimum | Notes |
 | --- | --- | --- | --- | --- |
-| `v0-bootstrap` | Storage, federation, budget | ~$0 | ~$0 | State blobs are tiny. Federated credentials and budget alerts are free |
+| `v0-bootstrap` | Storage, federation, budget, tag policy, shared workspace | ~$0 | ~$0 | State blobs are tiny. Federated credentials, budget alerts and policy are free; activity log ingestion into Log Analytics is free, and the workspace's 0.1 GB daily cap bounds anything billable routed there later |
 | `v1-network` | NAT Gateway, public IPs | ~$40 | $0 | All hourly. The destroy removes all of it |
 | `v2-cluster` | Node pool VMs, load balancer | ~$110 | ~$0 | All hourly. The registry is `ghcr.io` and free, so nothing permanent is added here |
 | `v3-gitops` | Argo CD's own pods | ~$0 extra | $0 | Software in a cluster you already pay for |

@@ -72,6 +72,7 @@ The application is a stub until `v5-state` — no database to persist a monitor 
 - **An Entra application** with federated credentials for GitHub. Two identities: a **plan** identity with `Reader` plus state access, and an **apply** identity whose role assignments grow each milestone. The apply identity gets a federated credential per environment, so a job targeting `prod` presents a different subject than one targeting `dev`.
 - **A consumption budget**, action group and email receiver.
 - **An Azure Policy assignment** inheriting tags from the resource group, because Azure tags do not propagate on their own.
+- **A shared Log Analytics workspace** receiving the subscription's activity log, with retention and a daily cap set at creation. It is the default destination for every diagnostic setting that follows.
 - **A workflow** running `fmt`, `validate` and `plan` on every pull request.
 
 The state module runs on plain Terraform and local state — the backend it would use is the thing it creates — then the state moves into the container. That happens once in the life of the repository, and it is the only Terraform in this project that Terragrunt does not wrap.
@@ -231,9 +232,9 @@ That is the same policy `v10-harden` wrote as a NetworkPolicy, enforced again so
 | 3 | The root `root.hcl`: `remote_state`, provider generation, and the move of the state into the container | Done |
 | 4 | The Entra application, federated credentials for GitHub, plan and apply identities | Done |
 | 5 | The budget. A consumption budget, an action group, an email receiver | Done |
-| 6 | The subscription baseline. Tag inheritance policy, resource group layout, diagnostic defaults | **Next** |
+| 6 | The subscription baseline. Tag inheritance policy, resource group layout, diagnostic defaults | Done |
 | 6a | The `live/` skeleton. `_envcommon/`, the three environment directories, `env.hcl` per environment | Done |
-| 7 | The first workflow. `fmt`, `validate` and `plan` on each pull request | Not started |
+| 7 | The first workflow. `fmt`, `validate` and `plan` on each pull request | **Next** |
 
 Steps 1 to 3 produce a state backend that stores its own state. Steps 4 and 7 are one test in two halves: step 4 creates the identities, step 7 proves they work. Step 6a builds no Azure resources — it is the directory shape the rest of the project applies through, and it is worth having before `v1-network` has something to put in it.
 
@@ -335,6 +336,23 @@ They belong with the backend in lifetime — subscription-wide, shared by `dev`,
 It is also the first unit applied from `live/`, which makes it the first real test of `root.hcl` somewhere other than the directory it was written against.
 
 The unit is applied by a human, not by CI. The identity that creates the pipeline's identities needs directory permissions the pipeline should never hold, so the pipeline never plans or applies it. This is the pre-landing-zone shape, and it is temporary. `v12-govern` replaces it with the industry-standard one: the platform layer vends user-assigned managed identities to the workload, and this unit is destroyed.
+
+### Resource group layout: by lifetime first, then by component
+
+A resource group is the unit Azure deletes together, so the groups follow what gets destroyed together.
+
+| Group | Owner | Lifetime |
+| --- | --- | --- |
+| `rg-pulsegate-tfstate` | `bootstrap/` | Never destroyed. `prevent_destroy` on the account |
+| `rg-pulsegate-shared` | `live/shared/baseline` | Persistent. The budget's action group and the shared Log Analytics workspace |
+| `rg-pulsegate-<env>-<component>` | The component's unit under `live/<env>/` | Created and destroyed with the component |
+| `rg-pulsegate-<env>-aks-nodes` | AKS, named through `node_resource_group` | Created and destroyed with the cluster |
+
+Per-environment groups are **per component, not one per environment.** Each unit creates the group it deploys into, so `terragrunt destroy` on a component removes its group too and no group is left empty in between. It also gives the apply identities a narrow scope: from `v1-network` on, an environment's apply identity is granted on that environment's groups, not the subscription.
+
+`rg-pulsegate-shared` used to be created by the budget module, because the action group needed somewhere to live. It moved to the baseline once the workspace needed the same group. A group that holds resources from several units should not be owned by whichever of them happened to come first.
+
+Tag inheritance reads from these groups, so each group carries the full tag set. A resource that lacks one of the four keys picks it up from its group at creation. Terraform-created resources should still set all four keys themselves. If a module omits a key, Azure adds it and the next plan tries to remove it, and that diff never settles.
 
 ## Open decisions
 
