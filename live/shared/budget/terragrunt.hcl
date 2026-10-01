@@ -14,9 +14,20 @@ terraform {
   source = "${get_repo_root()}/modules/budget"
 }
 
+# The action group needs a resource group, and the baseline owns it.
+dependency "baseline" {
+  config_path = "../baseline"
+
+  mock_outputs = {
+    shared_resource_group_name = "rg-pulsegate-shared"
+  }
+  mock_outputs_allowed_terraform_commands = ["validate"]
+}
+
 inputs = {
-  project    = include.root.locals.project
-  start_date = "2026-09-01T00:00:00Z"
+  project             = include.root.locals.project
+  resource_group_name = dependency.baseline.outputs.shared_resource_group_name
+  start_date          = "2026-09-01T00:00:00Z"
 
   # No default: a missing address should fail the plan, not create a budget
   # that alerts nobody.

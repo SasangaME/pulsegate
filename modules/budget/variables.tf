@@ -3,10 +3,9 @@ variable "project" {
   type        = string
 }
 
-variable "location" {
-  description = "Azure region for the resource group. The action group itself is global."
+variable "resource_group_name" {
+  description = "Where the action group lives. Owned by live/shared/baseline, not by this module."
   type        = string
-  default     = "westus3"
 }
 
 variable "amount" {

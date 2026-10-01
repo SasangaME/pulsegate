@@ -9,18 +9,9 @@ locals {
   }
 }
 
-# The action group has to live in a resource group. Not the state backend's:
-# that one belongs to bootstrap/, and a unit that can be destroyed should not
-# share a group with the one that cannot.
-resource "azurerm_resource_group" "shared" {
-  name     = "rg-${var.project}-shared"
-  location = var.location
-  tags     = local.tags
-}
-
 resource "azurerm_monitor_action_group" "budget" {
   name                = "ag-${var.project}-budget"
-  resource_group_name = azurerm_resource_group.shared.name
+  resource_group_name = var.resource_group_name
   short_name          = "budget" # 12 characters at most; it is the SMS sender name
   tags                = local.tags
 

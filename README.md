@@ -147,7 +147,9 @@ The budget is in place, in `live/shared/budget/`: one $20 monthly budget across 
 
 The `live/` skeleton is in place ahead of it. Each of `dev`, `stage` and `prod` has an `env.hcl` that names the environment and nothing else yet, and `live/_envcommon/` documents the pattern the first per-environment component will follow: one file per component holding what every environment shares, included by a thin unit that adds only what differs. It builds no Azure resources.
 
-Next is the subscription baseline: the tag inheritance policy, the resource group layout and diagnostic defaults.
+The subscription baseline is applied, in `live/shared/baseline/`. One initiative wraps the built-in tag inheritance policy once for each of the four keys, so a resource created without `Project`, `Environment`, `ManagedBy` or `Milestone` picks it up from its resource group — including the resources AKS will create on its own. The assignment's identity holds `Tag Contributor`, not the `Contributor` the built-in asks for, because a tag write is all it ever does. The subscription's activity log goes to a shared Log Analytics workspace with 30-day retention and a 0.1 GB daily cap. Activity log ingestion is free, so the workspace costs nothing until something billable is pointed at it, and the cap makes that a decision. The baseline also owns `rg-pulsegate-shared` now, which the budget created first. The resource group layout is in [ROADMAP.md](ROADMAP.md).
+
+Next is the first workflow: `fmt`, `validate` and `plan` on each pull request, using the federated identities.
 
 The documentation and the `.gitignore` came first, in that order and on purpose — the ignore file has to be right before the first apply, not after it. State files and plan files both carry resource attributes in plaintext, and a secret that reaches a commit is disclosed whether or not the next commit removes it.
 
