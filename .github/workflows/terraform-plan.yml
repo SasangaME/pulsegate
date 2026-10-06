@@ -1,0 +1,140 @@
+# fmt, validate and plan on every pull request, and a plan on every push to
+# main. Step 7 of v0-bootstrap: the half of the OIDC test that proves the
+# identities from step 4 work.
+#
+# Nothing here holds a credential. The plan identity authenticates with a
+# token GitHub mints for the job, exchanged through the federated credential
+# whose subject matches the trigger -- `pull_request` for a PR, `ref:refs/heads/main`
+# for a push. No job declares an `environment:`, because that would change
+# the subject and the plan identity has no credential for it.
+
+name: terraform-plan
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# One run per ref. A newer push makes the older plan worthless, and cancelling
+# it releases the state lease sooner.
+concurrency:
+  group: terraform-plan-${{ github.ref }}
+  cancel-in-progress: true
+
+# Nothing by default. Each job asks for what it uses.
+permissions: {}
+
+env:
+  TF_VERSION: 1.14.6
+  TG_VERSION: 1.1.4
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TG_NON_INTERACTIVE: "true"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Static checks. No Azure, no token: a formatting error should not cost a
+  # login, and a fork's pull request can run this half.
+  # ---------------------------------------------------------------------------
+  static:
+    name: fmt and validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          # The wrapper rewrites terraform's stdout, which Terragrunt parses.
+          terraform_wrapper: false
+
+      - name: Install Terragrunt
+        run: ./.github/scripts/install-terragrunt.sh "$TG_VERSION"
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+
+      - name: terragrunt hcl fmt
+        run: terragrunt hcl fmt --check --diff
+
+      # Each module on its own, with no backend. validate needs no provider
+      # configuration, so this never touches Azure.
+      - name: terraform validate
+        run: |
+          for dir in modules/*/ bootstrap/; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false >/dev/null
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+
+  # ---------------------------------------------------------------------------
+  # Plan, against the real state in Blob Storage, as the plan identity.
+  # ---------------------------------------------------------------------------
+  plan:
+    name: plan
+    needs: static
+    runs-on: ubuntu-latest
+    # A fork cannot mint a token for this repository's federated credential.
+    # Skip the job rather than let it fail at login.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      # The azurerm provider and the azurerm backend both read these. With
+      # ARM_USE_OIDC they request the job's OIDC token themselves, so there is
+      # no azure/login step and no az CLI session to leak into a later step.
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      # root.hcl hashes this into the state account's name.
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Terragrunt
+        run: ./.github/scripts/install-terragrunt.sh "$TG_VERSION"
+
+      # Every unit in the repository except the ones the plan identity cannot
+      # read, so a new unit under live/<env>/ is planned without editing this:
+      #
+      #   live/shared/identity  reads Entra applications through Graph, and
+      #                         the plan identity holds no Graph permission.
+      #   live/shared/budget    needs AZURE_BUDGET_EMAIL, which CI does not
+      #                         have, and which a public log should not show.
+      #
+      # Both are applied by hand. See their terragrunt.hcl.
+      #
+      # -lock-timeout because plan takes the blob lease, and a plan on main
+      # can overlap one on a pull request.
+      - name: terragrunt plan
+        run: |
+          set -o pipefail
+          terragrunt run --all \
+            --filter '!./live/shared/identity' \
+            --filter '!./live/shared/budget' \
+            --tf-forward-stdout \
+            -- plan -lock-timeout=5m -no-color 2>&1 | tee plan.log
+
+      - name: Plan summary
+        if: always()
+        run: |
+          {
+            echo "## terragrunt plan"
+            echo
+            echo '```'
+            grep -E '^(Plan:|No changes\.|Error:)' plan.log || echo "No plan lines found -- see the job log."
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
