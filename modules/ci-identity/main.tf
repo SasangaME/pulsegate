@@ -17,14 +17,23 @@ locals {
   # Subjects are compared as exact strings, with no wildcards. A job presents
   # exactly one of these shapes:
   #
-  #   repo:OWNER/NAME:pull_request          a pull_request-triggered job
-  #   repo:OWNER/NAME:ref:refs/heads/main   a push to main, with no environment
-  #   repo:OWNER/NAME:environment:dev       any job that declares an environment
+  #   repo:OWNER@OID/NAME@RID:pull_request          a pull_request-triggered job
+  #   repo:OWNER@OID/NAME@RID:ref:refs/heads/main   a push to main, with no environment
+  #   repo:OWNER@OID/NAME@RID:environment:dev       any job that declares an environment
   #
   # The last one wins whenever it applies: a job bound to an environment
   # presents the environment subject, whatever its branch or trigger. That is
   # what lets the apply identity be per environment.
-  subject_prefix = "repo:${var.github_repository}"
+  #
+  # The @OID and @RID are the owner's and repository's numeric IDs. GitHub
+  # adds them when the repository uses immutable subjects, which this one does
+  # (`gh api repos/OWNER/NAME/actions/oidc/customization/sub`). A name can be
+  # freed and claimed again by someone else; the IDs cannot, so a deleted or
+  # renamed repository's subjects stop matching rather than pass to its
+  # successor.
+  owner_name     = split("/", var.github_repository)[0]
+  repo_name      = split("/", var.github_repository)[1]
+  subject_prefix = "repo:${local.owner_name}@${var.github_owner_id}/${local.repo_name}@${var.github_repository_id}"
 
   plan_subjects = {
     pull-request = "${local.subject_prefix}:pull_request"

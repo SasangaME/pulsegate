@@ -136,6 +136,8 @@ None of these is a secret. They are identifiers, and the authentication is the f
 
 **Note.** The federated credential's subject string is exact. A credential written for `repo:OWNER/pulsegate:ref:refs/heads/main` does not authorize a pull request job, which presents `repo:OWNER/pulsegate:pull_request`. And a job that declares an `environment:` presents `repo:OWNER/pulsegate:environment:<name>` instead of either, whatever its branch. Step 4 therefore gives the plan identity the `pull_request` and `main` subjects, and each apply identity only its own environment's subject — which is what makes the GitHub Environment, and its reviewers on `prod`, the gate on every apply.
 
+**Note.** This repository uses GitHub's immutable subjects, so every subject also carries the owner's and repository's numeric IDs: `repo:OWNER@<owner-id>/pulsegate@<repo-id>:pull_request`, not `repo:OWNER/pulsegate:pull_request`. The first plan failed on exactly this, with `AADSTS700213` naming the presented subject. `gh api repos/OWNER/pulsegate/actions/oidc/customization/sub` shows the prefix GitHub sends, and the two IDs are inputs to `live/shared/identity`. Kept rather than switched off: a repository name can be freed and claimed again, the IDs cannot.
+
 ## Operation 4: Install Argo CD, on every cluster rebuild
 
 **Reason.** Argo CD cannot install itself, and this project has declared that Terraform stops at the cluster boundary. The bootstrap has to break one of those two rules exactly once. Breaking it by hand, in the runbook, with a check, is better than breaking it in Terraform, where the exception becomes permanent and the cluster becomes a dependency of the state file.

@@ -13,6 +13,16 @@ variable "github_repository" {
   }
 }
 
+variable "github_owner_id" {
+  description = "Numeric ID of the repository's owner. GitHub's immutable subject carries it next to the owner's name."
+  type        = number
+}
+
+variable "github_repository_id" {
+  description = "Numeric ID of the repository. GitHub's immutable subject carries it next to the repository's name."
+  type        = number
+}
+
 variable "environments" {
   description = "Environments that get their own apply identity. Each must match a GitHub Environment of the same name."
   type        = set(string)
