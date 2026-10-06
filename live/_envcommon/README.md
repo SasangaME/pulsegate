@@ -34,4 +34,6 @@ locals {
 `live/shared/` has no `env.hcl` and does not use this directory. Its units
 exist once, not once per environment.
 
-Empty until `v1-network` adds the first per-environment component.
+| File | Component | Since |
+| --- | --- | --- |
+| `network.hcl` | VNet, subnets, NSGs, NAT Gateway, Private DNS zones | `v1-network` |
