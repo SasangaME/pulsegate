@@ -30,7 +30,12 @@ generate "provider_azuread" {
 inputs = {
   project           = include.root.locals.project
   github_repository = "SasangaME/pulsegate"
-  environments      = ["dev", "stage", "prod"]
+
+  # From `gh api repos/SasangaME/pulsegate --jq '{owner_id: .owner.id, repo_id: .id}'`.
+  # Public identifiers, not credentials.
+  github_owner_id      = 12818777
+  github_repository_id = 1382990433
+  environments         = ["dev", "stage", "prod"]
 
   state_resource_group_name  = include.root.locals.state_resource_group_name
   state_storage_account_name = include.root.locals.storage_account_name
