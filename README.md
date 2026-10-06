@@ -135,7 +135,7 @@ What the split costs is that the digest write becomes cross-repository, and `GIT
 
 ## Where the project stands
 
-`v0-bootstrap` is under way, and the first resources are applied. The state backend exists: a resource group, a zone-redundant StorageV2 account with shared key access disabled, and one private container holding blob versioning and thirty-day retention on both blobs and containers.
+`v0-bootstrap` is complete. The state backend exists: a resource group, a zone-redundant StorageV2 account with shared key access disabled, and one private container holding blob versioning and thirty-day retention on both blobs and containers.
 
 That module no longer keeps its state on disk. The root `root.hcl` that every later environment inherits is in place, and `bootstrap/` was the first unit to adopt it: its state now lives in the container it created, under the key `bootstrap/terraform.tfstate`.
 
@@ -149,11 +149,15 @@ The `live/` skeleton is in place ahead of it. Each of `dev`, `stage` and `prod` 
 
 The subscription baseline is applied, in `live/shared/baseline/`. One initiative wraps the built-in tag inheritance policy once for each of the four keys, so a resource created without `Project`, `Environment`, `ManagedBy` or `Milestone` picks it up from its resource group — including the resources AKS will create on its own. The assignment's identity holds `Tag Contributor`, not the `Contributor` the built-in asks for, because a tag write is all it ever does. The subscription's activity log goes to a shared Log Analytics workspace with 30-day retention and a 0.1 GB daily cap. Activity log ingestion is free, so the workspace costs nothing until something billable is pointed at it, and the cap makes that a decision. The baseline also owns `rg-pulsegate-shared` now, which the budget created first. The resource group layout is in [ROADMAP.md](ROADMAP.md).
 
-Next is the first workflow: `fmt`, `validate` and `plan` on each pull request, using the federated identities.
+The first workflow runs on every pull request and every push to `main`. One job checks formatting and validates each module without touching Azure. A second plans every unit against the state in Blob Storage as the plan identity, which requests the job's OIDC token itself — there is no login action, and no secret in the repository's settings. Two units are left out of it and stay applied by hand: `live/shared/identity`, which reads Entra applications through Graph, and `live/shared/budget`, whose alert address CI does not have. Any new unit under `live/` is planned without editing the workflow.
+
+The first run failed at the token exchange, and the cause is worth knowing before writing a federated credential anywhere else. This repository uses GitHub's immutable subjects, so a job presents `repo:OWNER@<owner-id>/pulsegate@<repo-id>:pull_request`, not `repo:OWNER/pulsegate:pull_request`. The credentials now carry the IDs. A repository name can be freed and claimed again; the IDs cannot, so a renamed or deleted repository's subjects stop matching instead of passing to whoever takes the name next.
+
+Next is `v1-network`: the VNet, its subnets and NSGs, the NAT Gateway, and a small private VM to prove the path. It is the first component built per environment, and the first that something has to apply — which raises how the apply identities get the rights to create the resource groups they will be scoped to.
 
 The documentation and the `.gitignore` came first, in that order and on purpose — the ignore file has to be right before the first apply, not after it. State files and plan files both carry resource attributes in plaintext, and a secret that reaches a commit is disclosed whether or not the next commit removes it.
 
-`v0-bootstrap` is finished when a pull request can plan against remote state in Azure Blob Storage using a federated credential that exists only for the life of the job, and no identity in the pipeline holds a client secret.
+`v0-bootstrap` was finished when a pull request could plan against remote state in Azure Blob Storage using a federated credential that exists only for the life of the job, with no identity in the pipeline holding a client secret. Both the pull request run and the run on `main` did.
 
 ## How these documents work
 

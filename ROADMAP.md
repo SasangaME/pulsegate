@@ -209,8 +209,8 @@ That is the same policy `v10-harden` wrote as a NetworkPolicy, enforced again so
 
 | Tag | Status |
 | --- | --- |
-| `v0-bootstrap` | **In progress** |
-| `v1-network` | Not started |
+| `v0-bootstrap` | Done |
+| `v1-network` | **Next** |
 | `v2-cluster` | Not started |
 | `v3-gitops` | Not started |
 | `v4-pipeline` | Not started |
@@ -234,11 +234,13 @@ That is the same policy `v10-harden` wrote as a NetworkPolicy, enforced again so
 | 5 | The budget. A consumption budget, an action group, an email receiver | Done |
 | 6 | The subscription baseline. Tag inheritance policy, resource group layout, diagnostic defaults | Done |
 | 6a | The `live/` skeleton. `_envcommon/`, the three environment directories, `env.hcl` per environment | Done |
-| 7 | The first workflow. `fmt`, `validate` and `plan` on each pull request | **Next** |
+| 7 | The first workflow. `fmt`, `validate` and `plan` on each pull request | Done |
 
 Steps 1 to 3 produce a state backend that stores its own state. Steps 4 and 7 are one test in two halves: step 4 creates the identities, step 7 proves they work. Step 6a builds no Azure resources — it is the directory shape the rest of the project applies through, and it is worth having before `v1-network` has something to put in it.
 
 `v0-bootstrap` is complete when a pull request runs a plan that reads state from Blob Storage using a federated credential, and no identity in the pipeline holds a client secret.
+
+It is. The plan identity planned from a pull request and again from the push to `main`, one run for each of its two federated subjects, and read state from the container both times. The first run failed at the token exchange: this repository uses GitHub's immutable subjects, which carry the owner's and repository's numeric IDs, and the credentials had been written for the name-only form. The fix was on the Terraform side, as [RUNBOOK.md](RUNBOOK.md) operation 3 predicted for subject mismatches — the IDs are now inputs to `live/shared/identity`.
 
 ## Decisions taken
 
